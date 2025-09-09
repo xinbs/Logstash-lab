@@ -1,0 +1,32 @@
+version: "3.9"
+services:
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.14.2
+    container_name: logstash-lab
+    ports:
+      - "15515:15515"       # http input（内网用，别暴露公网）
+    environment:
+      - LS_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./logstash/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - ./logstash/pipeline:/usr/share/logstash/pipeline
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "curl -sS http://127.0.0.1:9600/_node/pipelines | grep -q test"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build: ./web
+    container_name: logstash-lab-web
+    ports:
+      - "19000:19000"
+    volumes:
+      - ./logstash/pipeline:/app/pipeline         # 写 filter
+      - ./data:/app/data                          # 读结果
+    environment:
+      - LOGSTASH_HTTP=http://logstash:15515       # 发送日志
+    depends_on:
+      - logstash

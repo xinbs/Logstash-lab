@@ -1,0 +1,12 @@
+http.host: "0.0.0.0"
+api.enabled: true
+api.http.host: "0.0.0.0"
+api.http.port: 9600
+
+# 热加载
+config.reload.automatic: true
+config.reload.interval: 3s
+
+# 降低持久化干扰
+path.data: /usr/share/logstash/data
+path.logs: /usr/share/logstash/logs
