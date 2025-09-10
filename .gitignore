@@ -1,49 +1,35 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+# 数据文件
+data/out/*.ndjson
+data/out/*.json
+data/out/*.log
 
-# Virtual Environment
-venv/
-env/
-ENV/
-
-# Docker
-.dockerignore
-
-# Logs and data
-data/
-logs/
+# 日志文件
+logs/*.log
 *.log
 
-# IDE
+# Docker
+.docker/
+
+# 开发环境
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# 系统文件
 .DS_Store
 .DS_Store?
 ._*
@@ -52,14 +38,17 @@ logs/
 ehthumbs.db
 Thumbs.db
 
-# Git
-.git/
-
-# Temporary files
-tmp/
-temp/
+# 临时文件
 *.tmp
 *.temp
+*.bak
+*.backup
 
-# Logstash data
-data/out/*.ndjson
+# 配置文件（包含敏感信息）
+config/secrets.yml
+.env.local
+.env.production
+
+# 测试文件
+test_*.log
+sample_*.log

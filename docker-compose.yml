@@ -12,6 +12,7 @@ services:
       - ./logstash/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
       - ./logstash/pipeline:/usr/share/logstash/pipeline
       - ./data:/data
+      - ./logs:/usr/share/logstash/logs    # 挂载日志目录
     healthcheck:
       test: ["CMD", "bash", "-lc", "curl -sS http://127.0.0.1:9600/_node/pipelines | grep -q test"]
       interval: 5s
@@ -26,7 +27,11 @@ services:
     volumes:
       - ./logstash/pipeline:/app/pipeline         # 写 filter
       - ./data:/app/data                          # 读结果
+      - ./web/app.py:/app/app.py                  # 开发时热更新
+      - ./web/templates:/app/templates            # 开发时热更新
+      - /var/run/docker.sock:/var/run/docker.sock # Docker socket for logs
     environment:
       - LOGSTASH_HTTP=http://logstash:15515       # 发送日志
+      - FLASK_ENV=development                     # 开发模式，支持自动重载
     depends_on:
       - logstash

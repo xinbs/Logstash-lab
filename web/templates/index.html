@@ -7,10 +7,12 @@
     <style>
         body {
             font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-            margin: 24px;
-            max-width: 1200px;
+            margin: 0;
+            padding: 24px;
             line-height: 1.6;
             background-color: #f5f5f5;
+            min-height: 100vh;
+            box-sizing: border-box;
         }
         
         .container {
@@ -18,6 +20,8 @@
             padding: 24px;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: none;
         }
         
         h1 {
@@ -108,11 +112,14 @@
             color: #f8f8f2;
             padding: 16px;
             overflow: auto;
-            max-height: 400px;
+            min-height: 200px;
+            max-height: 80vh;
             border-radius: 4px;
             font-size: 13px;
             line-height: 1.4;
             border: 1px solid #333;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
         
         .checkbox-container {
@@ -175,6 +182,14 @@
         <div class="grid">
             <div>
                 <h3>📝 Filter 配置（可编辑）</h3>
+                
+                <!-- 简化说明 -->
+                <div style="margin-bottom: 16px; padding: 12px; background-color: #e3f2fd; border-radius: 4px; border-left: 4px solid #2196f3;">
+                    <div style="font-size: 14px; color: #1565c0;">
+                        💡 <strong>自动条件包装</strong>：系统会自动为您的 filter 规则添加 <code>if "test" == [@metadata][type]</code> 条件判断
+                    </div>
+                </div>
+                
                 <form id="filterForm">
                     <textarea name="filter" id="filter" placeholder="请输入 Logstash filter 配置...">{{ current_filter }}</textarea>
                     <div>
@@ -187,6 +202,7 @@
                     <button type="button" class="example-btn" onclick="loadExample('apache')">Apache 日志</button>
                     <button type="button" class="example-btn" onclick="loadExample('json')">JSON 日志</button>
                     <button type="button" class="example-btn" onclick="loadExample('syslog')">Syslog</button>
+                    <button type="button" class="example-btn" onclick="clearFormData()" style="background-color: #dc3545;">🗑️ 清空表单</button>
                 </div>
             </div>
             
@@ -216,7 +232,11 @@
         
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 32px;">
             <h3>📊 最近解析结果（最新 50 条 NDJSON）</h3>
-            <button type="button" class="btn-warning" onclick="clearResults()">🗑️ 清空结果</button>
+            <div>
+                <button type="button" class="btn-success" onclick="loadParsedResults()">🔄 获取解析后的记录</button>
+                <button type="button" class="btn-primary" onclick="showLogstashLogs()">📋 查看 Logstash 日志</button>
+                <button type="button" class="btn-warning" onclick="clearResults()">🗑️ 清空结果</button>
+            </div>
         </div>
         
         <pre id="results">{% for line in last %}{{ line }}
@@ -224,6 +244,44 @@
     </div>
 
     <script>
+        // 页面加载时恢复保存的数据
+        window.onload = function() {
+            restoreFormData();
+        };
+        
+        // 保存表单数据到本地存储
+        function saveFormData() {
+            const filterContent = document.getElementById('filter').value;
+            const logsContent = document.getElementById('logs').value;
+            const isJsonChecked = document.querySelector('input[name="is_json"]').checked;
+            
+            localStorage.setItem('logstash_filter', filterContent);
+            localStorage.setItem('logstash_logs', logsContent);
+            localStorage.setItem('logstash_is_json', isJsonChecked);
+        }
+        
+        // 从本地存储恢复表单数据
+        function restoreFormData() {
+            const savedFilter = localStorage.getItem('logstash_filter');
+            const savedLogs = localStorage.getItem('logstash_logs');
+            const savedIsJson = localStorage.getItem('logstash_is_json');
+            
+            if (savedFilter && savedFilter.trim() !== '') {
+                document.getElementById('filter').value = savedFilter;
+            }
+            if (savedLogs && savedLogs.trim() !== '') {
+                document.getElementById('logs').value = savedLogs;
+            }
+            if (savedIsJson !== null) {
+                document.querySelector('input[name="is_json"]').checked = savedIsJson === 'true';
+            }
+        }
+        
+        // 监听输入变化，自动保存
+        document.getElementById('filter').addEventListener('input', saveFormData);
+        document.getElementById('logs').addEventListener('input', saveFormData);
+        document.querySelector('input[name="is_json"]').addEventListener('change', saveFormData);
+        
         // Filter 保存
         document.getElementById('filterForm').onsubmit = async (e) => {
             e.preventDefault();
@@ -236,6 +294,7 @@
                 });
                 const result = await response.json();
                 showMessage(result.message, 'success');
+                saveFormData(); // 保存表单数据
             } catch (error) {
                 showMessage('保存失败: ' + error.message, 'error');
             }
@@ -258,9 +317,19 @@
                     showMessage(result.message, 'success');
                     // 更新结果显示
                     const resultsElement = document.getElementById('results');
-                    resultsElement.textContent = result.events.map(event => 
-                        JSON.stringify(event, null, 2)
-                    ).join('\n\n');
+                    if (result.events && result.events.length > 0) {
+                        resultsElement.textContent = result.events.map(event => 
+                            JSON.stringify(event, null, 2)
+                        ).join('\n\n');
+                    } else {
+                        resultsElement.textContent = '📊 没有新的解析结果，请检查 Logstash 配置或等待几秒后重试';
+                    }
+                    
+                    // 自动滚动到结果区域
+                    resultsElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    
+                    // 保存表单数据
+                    saveFormData();
                 } else {
                     showMessage(result.message, 'error');
                 }
@@ -300,56 +369,130 @@
             }
         }
         
+        // 获取解析后的记录
+        async function loadParsedResults() {
+            try {
+                showMessage('正在获取最新的解析记录...', 'success');
+                const response = await fetch('/get_parsed_results');
+                const result = await response.json();
+
+                if (result.ok) {
+                    const resultsElement = document.getElementById('results');
+                    if (result.events && result.events.length > 0) {
+                        // 格式化显示解析后的记录
+                        const formattedResults = result.events.map((event, index) => {
+                            return `=== 记录 ${index + 1} ===\n${JSON.stringify(event, null, 2)}`;
+                        }).join('\n\n');
+                        
+                        resultsElement.textContent = formattedResults;
+                        showMessage(`成功获取 ${result.events.length} 条解析记录`, 'success');
+                    } else {
+                        resultsElement.textContent = '📊 暂无解析记录，请先发送一些测试日志';
+                        showMessage('暂无解析记录', 'success');
+                    }
+                    
+                    // 自动滚动到结果区域
+                    resultsElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                } else {
+                    showMessage(result.message, 'error');
+                }
+            } catch (error) {
+                showMessage('获取解析记录失败: ' + error.message, 'error');
+            }
+        }
+
+        // 查看 Logstash 日志
+        async function showLogstashLogs() {
+            try {
+                showMessage('正在获取 Logstash 日志...', 'success');
+                const response = await fetch('/logstash_logs');
+                const result = await response.json();
+
+                if (result.ok) {
+                    const resultsElement = document.getElementById('results');
+                    resultsElement.textContent = result.logs;
+                    showMessage('Logstash 日志获取成功', 'success');
+                } else {
+                    showMessage(result.message, 'error');
+                }
+            } catch (error) {
+                showMessage('获取日志失败: ' + error.message, 'error');
+            }
+        }
+        
+        // 清空表单数据
+        function clearFormData() {
+            document.getElementById('filter').value = '';
+            document.getElementById('logs').value = '';
+            document.querySelector('input[name="is_json"]').checked = false;
+            document.getElementById('results').textContent = '';
+            
+            // 清空本地存储
+            localStorage.removeItem('logstash_filter');
+            localStorage.removeItem('logstash_logs');
+            localStorage.removeItem('logstash_is_json');
+            
+            showMessage('已清空所有表单数据', 'success');
+        }
+        
         // 加载示例 Filter
         function loadExample(type) {
             const filterTextarea = document.getElementById('filter');
+            const logsTextarea = document.getElementById('logs');
             let example = '';
+            let sampleLog = '';
             
             switch(type) {
                 case 'apache':
-                    example = `filter {
-  grok { 
+                    // 不包含 filter {} 包装，系统会自动添加 if "test" == [@metadata][type] 条件判断
+                    example = `# Parse Apache Common Log Format
+grok { 
     match => { "message" => "%{COMBINEDAPACHELOG}" } 
-  }
-  mutate { 
+}
+mutate { 
     rename => { "clientip" => "src_ip" } 
-  }
-  date { 
+}
+date { 
     match => ["timestamp", "dd/MMM/yyyy:HH:mm:ss Z"] 
     target => "@timestamp"
-  }
 }`;
+                    sampleLog = '127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] "GET /index.html HTTP/1.1" 200 2326';
+                    document.querySelector('input[name="is_json"]').checked = false;
                     break;
                 case 'json':
-                    example = `filter {
-  json { 
+                    example = `# Parse JSON application logs
+json { 
     source => "message" 
-  }
-  date { 
+}
+date { 
     match => ["timestamp", "ISO8601"] 
     target => "@timestamp" 
-  }
-  if [level] {
+}
+if [level] {
     mutate { 
-      uppercase => [ "level" ] 
+        uppercase => [ "level" ] 
     }
-  }
 }`;
+                    sampleLog = '{"timestamp": "2023-12-25T10:00:00Z", "level": "info", "message": "用户登录成功", "user_id": 12345}';
+                    document.querySelector('input[name="is_json"]').checked = true;
                     break;
                 case 'syslog':
-                    example = `filter {
-  grok {
+                    example = `# Parse Syslog format
+grok {
     match => { "message" => "%{SYSLOGTIMESTAMP:timestamp} %{IPORHOST:host} %{PROG:program}: %{GREEDYDATA:log_message}" }
-  }
-  date {
+}
+date {
     match => [ "timestamp", "MMM  d HH:mm:ss", "MMM dd HH:mm:ss" ]
-  }
 }`;
+                    sampleLog = 'Dec 25 10:00:00 server01 sshd[1234]: Accepted password for user from 192.168.1.100';
+                    document.querySelector('input[name="is_json"]').checked = false;
                     break;
             }
             
             filterTextarea.value = example;
-            showMessage(`已加载 ${type} 示例模板`, 'success');
+            logsTextarea.value = sampleLog;
+            saveFormData(); // 保存加载的示例数据
+            showMessage(`已加载 ${type} 示例模板和测试日志 (自动添加条件: if "test" == [@metadata][type])`, 'success');
         }
     </script>
 </body>

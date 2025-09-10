@@ -1,4 +1,3 @@
-http.host: "0.0.0.0"
 api.enabled: true
 api.http.host: "0.0.0.0"
 api.http.port: 9600
