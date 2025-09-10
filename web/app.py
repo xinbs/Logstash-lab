@@ -126,23 +126,48 @@ def write_filter(new_filter_block: str, metadata_type: str = ""):
                 filter_start_line = i
     
     if filter_start_line != -1:
-        # 找到 filter 块的结束行
+        # 找到 filter 块的结束行 - 改进的 bracket counting
         bracket_count = 0
+        in_string = False
+        escape_next = False
+        
         for i in range(filter_start_line, len(lines)):
             line = lines[i]
             for char in line:
-                if char == '{':
-                    bracket_count += 1
-                elif char == '}':
-                    bracket_count -= 1
-                    if bracket_count == 0:
-                        filter_end_line = i
-                        break
+                if escape_next:
+                    escape_next = False
+                    continue
+                    
+                if char == '\\':
+                    escape_next = True
+                    continue
+                    
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                    
+                if not in_string:
+                    if char == '{':
+                        bracket_count += 1
+                    elif char == '}':
+                        bracket_count -= 1
+                        if bracket_count == 0:
+                            filter_end_line = i
+                            break
+                            
             if filter_end_line != -1:
                 break
         
         if filter_end_line == -1:
-            filter_end_line = len(lines) - 1
+            # 如果无法找到结束行，尝试查找下一个顶级块（如 output）
+            for i in range(filter_start_line + 1, len(lines)):
+                stripped = lines[i].strip()
+                if stripped.startswith('output {') or stripped.startswith('input {'):
+                    filter_end_line = i - 1
+                    break
+            
+            if filter_end_line == -1:
+                filter_end_line = len(lines) - 1
         
         # 替换主要的 filter 块
         new_lines = lines[:filter_start_line] + [new_filter_block] + lines[filter_end_line + 1:]
@@ -425,6 +450,187 @@ def logstash_logs():
         
     except Exception as e:
         return jsonify({"ok": False, "message": f"获取日志失败: {e}"})
+
+def extract_filter_from_pipeline(pipeline_content):
+    """从 pipeline 配置中提取 filter 块内容"""
+    lines = pipeline_content.split('\n')
+    filter_blocks = []
+    current_block = []
+    in_filter_block = False
+    bracket_count = 0
+    in_string = False
+    escape_next = False
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # 跳过空行和注释
+        if not stripped or stripped.startswith('#'):
+            if in_filter_block:
+                current_block.append(line)
+            continue
+        
+        # 检查是否是 filter 块的开始
+        if stripped.startswith('filter') and '{' in stripped and not in_filter_block:
+            in_filter_block = True
+            current_block = [line]
+            bracket_count = 0
+            
+            # 计算这一行的括号
+            for char in stripped:
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == '\\':
+                    escape_next = True
+                    continue
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                if not in_string:
+                    if char == '{':
+                        bracket_count += 1
+                    elif char == '}':
+                        bracket_count -= 1
+            
+            if bracket_count == 0:
+                # 单行 filter 块
+                filter_blocks.append('\n'.join(current_block))
+                in_filter_block = False
+                current_block = []
+        elif in_filter_block:
+            current_block.append(line)
+            
+            # 计算这一行的括号
+            for char in line:
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == '\\':
+                    escape_next = True
+                    continue
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                if not in_string:
+                    if char == '{':
+                        bracket_count += 1
+                    elif char == '}':
+                        bracket_count -= 1
+            
+            # 检查是否结束
+            if bracket_count == 0:
+                filter_blocks.append('\n'.join(current_block))
+                in_filter_block = False
+                current_block = []
+    
+    return filter_blocks
+
+def extract_main_filter_content(filter_block):
+    """从 filter 块中提取主要内容（去除外层 filter {} 包装）"""
+    lines = filter_block.split('\n')
+    content_lines = []
+    found_opening = False
+    bracket_count = 0
+    in_string = False
+    escape_next = False
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        if not found_opening:
+            if stripped.startswith('filter') and '{' in stripped:
+                found_opening = True
+                # 提取 { 后面的内容
+                brace_pos = line.find('{')
+                after_brace = line[brace_pos + 1:].strip()
+                if after_brace:
+                    content_lines.append(after_brace)
+                continue
+            continue
+        
+        # 计算括号层级
+        line_bracket_count = bracket_count
+        for char in line:
+            if escape_next:
+                escape_next = False
+                continue
+            if char == '\\':
+                escape_next = True
+                continue
+            if char == '"' and not escape_next:
+                in_string = not in_string
+            if not in_string:
+                if char == '{':
+                    bracket_count += 1
+                elif char == '}':
+                    bracket_count -= 1
+        
+        # 如果这一行结束后括号平衡了，说明这是最后一行
+        if bracket_count < 0:
+            # 去除最后的 }
+            brace_pos = line.rfind('}')
+            if brace_pos >= 0:
+                before_brace = line[:brace_pos].rstrip()
+                if before_brace:
+                    content_lines.append(before_brace)
+            break
+        else:
+            content_lines.append(line)
+    
+    return '\n'.join(content_lines)
+
+@app.route("/upload_pipeline", methods=["POST"])
+def upload_pipeline():
+    """接收 pipeline 配置文件，提取 filter 并应用到测试环境"""
+    try:
+        # 获取上传的内容
+        if 'file' in request.files:
+            # 文件上传
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({"ok": False, "message": "未选择文件"})
+            pipeline_content = file.read().decode('utf-8')
+        elif 'pipeline' in request.form:
+            # 表单数据
+            pipeline_content = request.form.get('pipeline', '')
+        else:
+            return jsonify({"ok": False, "message": "未提供 pipeline 内容"})
+        
+        if not pipeline_content.strip():
+            return jsonify({"ok": False, "message": "Pipeline 内容为空"})
+        
+        # 提取 filter 块
+        filter_blocks = extract_filter_from_pipeline(pipeline_content)
+        
+        if not filter_blocks:
+            return jsonify({"ok": False, "message": "未在 pipeline 中找到 filter 块"})
+        
+        # 选择最后一个 filter 块（通常是主要的处理逻辑）
+        main_filter_block = filter_blocks[-1]
+        
+        # 提取 filter 内容（去除外层包装）
+        filter_content = extract_main_filter_content(main_filter_block)
+        
+        if not filter_content.strip():
+            return jsonify({"ok": False, "message": "提取的 filter 内容为空"})
+        
+        # 应用到测试环境（使用现有的逻辑）
+        metadata_type = "test"
+        
+        # 包装 filter 内容
+        block = wrap_filter_with_condition(filter_content, metadata_type)
+        
+        # 写入配置文件
+        write_filter(block, metadata_type)
+        
+        return jsonify({
+            "ok": True, 
+            "message": f"Pipeline 已成功上传并应用到测试环境",
+            "extracted_filters": len(filter_blocks),
+            "applied_filter_preview": filter_content[:200] + "..." if len(filter_content) > 200 else filter_content
+        })
+        
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"处理 pipeline 失败: {str(e)}"})
 
 if __name__ == "__main__":
     # 初始化：确保目录存在

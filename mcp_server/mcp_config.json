@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "logstash-test": {
+      "command": "curl",
+      "args": [
+        "-X", "POST",
+        "http://localhost:19001/mcp",
+        "-H", "Content-Type: application/json",
+        "-d"
+      ],
+      "env": {},
+      "description": "Logstash 测试服务 MCP 服务器"
+    }
+  }
+}

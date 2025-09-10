@@ -35,3 +35,24 @@ services:
       - FLASK_ENV=development                     # 开发模式，支持自动重载
     depends_on:
       - logstash
+
+  mcp-server:
+    build: ./mcp_server
+    command: python mcp_server.py
+    container_name: logstash-lab-mcp
+    ports:
+      - "19001:19001"
+    volumes:
+      - ./mcp_server/mcp_server.py:/app/mcp_server.py    # 开发时热更新
+      - ./mcp_server/requirements.txt:/app/requirements.txt  # 依赖文件
+    environment:
+      - LOGSTASH_SERVICE_URL=http://web:19000
+      - FLASK_ENV=development                           # 开发模式，支持自动重载
+    depends_on:
+      - web
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19001/tools/health_check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

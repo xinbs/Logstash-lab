@@ -52,3 +52,4 @@ config/secrets.yml
 # 测试文件
 test_*.log
 sample_*.log
+bomgar.config

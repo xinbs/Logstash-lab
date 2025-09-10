@@ -28,6 +28,7 @@
 - 📊 **示例模板库**: 内置常用日志格式模板
 - 🔧 **日志调试**: 实时查看 Logstash 运行日志
 - 💾 **配置持久化**: 自动保存用户输入，刷新不丢失
+- 🌊 **MCP 服务器**: 为 AI 提供 SSE 流式调用接口，支持实时进度反馈和文件上传
 
 ## ✨ 核心特性
 
@@ -81,13 +82,101 @@ sudo docker compose up -d --build
 # Web 界面
 http://localhost:19000
 
+# MCP 服务器
+http://localhost:19001
+
+# 健康检查
+curl http://localhost:19001/tools/health_check
+
 # 服务状态检查
 sudo docker compose ps
 ```
 
+### 🔗 MCP 客户端配置
+
+为 AI 客户端（如 Cursor、Claude Desktop）配置 MCP 连接：
+
+#### 最简单配置 (推荐)
+```json
+{
+  "mcpServers": {
+    "logstash-test": {
+      "url": "http://localhost:19001/mcp",
+      "description": "Logstash 规则测试和调试工具"
+    }
+  }
+}
+```
+
+#### 兼容性配置
+```json
+{
+  "mcpServers": {
+    "logstash-test": {
+      "command": "curl",
+      "args": [
+        "-s", "-X", "POST", 
+        "http://localhost:19001/mcp",
+        "-H", "Content-Type: application/json",
+        "-d", "@-"
+      ],
+      "description": "Logstash 规则测试和调试工具"
+    }
+  }
+}
+```
+
+**配置位置**:
+- **Cursor**: `~/.cursor/mcp.json`
+- **Claude Desktop (macOS)**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Claude Desktop (Windows)**: `%APPDATA%/Claude/claude_desktop_config.json`
+
+**📚 详细配置指南**: 查看 [MCP 服务器文档](mcp_server/README.md)
+
 ## 📖 使用指南
 
 ### 基本工作流
+
+#### 🌟 推荐方式：Pipeline 文件上传
+
+1. **📁 准备 Pipeline 配置文件**
+   ```logstash
+   # your_pipeline.conf
+   input {
+     udp {
+       port => 18136
+       codec => line {}
+       add_field => { "[@metadata][type]" => "bomgar" }
+     }
+   }
+   
+   filter {
+     if "bomgar" == [@metadata][type] {
+       grok {
+         match => { "message" => "<%{POSINT:syslog_pri}>%{POSINT:syslog_ver} %{DATA:syslog_timestamp} %{GREEDYDATA:content}" }
+       }
+       # 更多 filter 规则...
+     }
+   }
+   
+   output {
+     kafka {
+       bootstrap_servers => "localhost:9092"
+       topic_id => "logs"
+     }
+   }
+   ```
+
+2. **🚀 上传并自动应用**
+   ```bash
+   # 方式一：文件上传（最推荐）
+   curl -X POST http://localhost:19000/upload_pipeline -F 'file=@your_pipeline.conf'
+   
+   # 方式二：Web 界面上传
+   # 访问 http://localhost:19000 → Pipeline 文件上传区域 → 选择文件或粘贴内容
+   ```
+
+#### 🔧 传统方式：直接编辑 Filter
 
 1. **📝 编辑 Filter 规则**
    ```logstash
@@ -109,15 +198,31 @@ sudo docker compose ps
    - 系统自动重载配置（3秒内生效）
    - 自动设置正确的元数据类型
 
-3. **🧪 输入测试数据**
-   ```
+#### 🧪 共同步骤：测试和验证
+
+3. **📝 输入测试数据**
+   ```bash
+   # Web 界面：直接在"测试日志"区域输入
    127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] "GET /index.html HTTP/1.1" 200 2326
+   
+   # API 调用：推荐使用 --data-urlencode
+   curl -X POST http://localhost:19000/test \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     --data-urlencode "logs=<133>1 2025-09-10T12:08:07+08:00 SGPDRT-VSBRS01 BG 16703 - [meta sequenceId=\"46\"] session_data"
    ```
 
 4. **🚀 发送并查看结果**
-   - 点击"发送并查看解析结果"
+   - **Web 界面**: 点击"发送并查看解析结果"按钮
+   - **API 调用**: 使用 `/get_parsed_results` 接口
    - 实时查看 JSON 格式的解析结果
    - 使用"获取解析后的记录"查看历史记录
+
+#### ⭐ 最佳实践
+
+- **首选 Pipeline 文件上传**: 避免 URL 编码和格式问题
+- **使用 `--data-urlencode`**: 处理特殊字符（如 `+` 号）
+- **测试前清空结果**: 确保结果的准确性
+- **查看 Logstash 日志**: 及时发现配置错误
 
 ### 内置示例模板
 
@@ -191,6 +296,7 @@ logstash-lab/
 
 | 端点 | 方法 | 描述 | 状态码 |
 |------|------|------|--------|
+| `/upload_pipeline` | POST | 🌟 **推荐** 上传完整 pipeline 文件并自动提取 filter | 200 |
 | `/save_filter` | POST | 保存和更新 filter 配置 | 200 |
 | `/test` | POST | 发送测试日志并获取解析结果 | 200 |
 | `/get_parsed_results` | GET | 获取最新的解析记录 | 200 |
@@ -199,11 +305,97 @@ logstash-lab/
 
 ---
 
-### 🔧 1. 编辑 Filter 接口
+### 🌟 1. Pipeline 文件上传接口（推荐）
+
+**端点**: `/upload_pipeline`  
+**方法**: `POST`  
+**描述**: 上传完整的 Logstash pipeline 配置文件，系统自动提取 filter 块并应用到测试环境
+
+#### 优势特性
+
+- ✅ **完全避免 URL 编码问题**: 不会出现 `+` 号变空格等编码问题
+- ✅ **保持原始格式**: 自动保留换行符、缩进和注释
+- ✅ **智能解析**: 自动识别和提取 filter 块，支持复杂嵌套结构
+- ✅ **双重支持**: 同时支持文件上传和文本内容粘贴
+- ✅ **无缝集成**: 自动应用到测试环境，无需额外配置
+
+#### 请求参数
+
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `file` | File | 否* | Pipeline 配置文件 (.conf/.txt) |
+| `pipeline` | string | 否* | Pipeline 配置文本内容 |
+
+*注：`file` 和 `pipeline` 二选一*
+
+#### 请求示例
+
+```bash
+# 🎯 方式一：文件上传（最推荐）
+curl -X POST http://localhost:19000/upload_pipeline \
+  -F 'file=@your_pipeline.conf'
+
+# 🎯 方式二：文本内容上传
+curl -X POST http://localhost:19000/upload_pipeline \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode 'pipeline=input {
+    udp {
+      port => 18136
+      codec => line {}
+      add_field => { "[@metadata][type]" => "bomgar" }
+    }
+  }
+  
+  filter {
+    if "bomgar" == [@metadata][type] {
+      grok {
+        match => { "message" => "<%{POSINT:syslog_pri}>%{POSINT:syslog_ver} %{DATA:syslog_timestamp} %{GREEDYDATA:content}" }
+      }
+      # 更多 filter 规则...
+    }
+  }
+  
+  output {
+    kafka {
+      bootstrap_servers => "localhost:9092"
+      topic_id => "logs"
+    }
+  }'
+
+# 🎯 方式三：从已有配置文件提取
+curl -X POST http://localhost:19000/upload_pipeline \
+  -F 'file=@/etc/logstash/pipelines.d/production.conf'
+```
+
+#### 响应示例
+
+```json
+{
+  "ok": true,
+  "message": "Pipeline 已成功上传并应用到测试环境",
+  "extracted_filters": 1,
+  "applied_filter_preview": "    if \"bomgar\" == [@metadata][type] {\n        grok {\n            match => { \"message\" => \"<%{POSINT:syslog_pri}>%{POSINT:syslog_ver}...\" }\n        }\n        # Parse bomgar specific fields...\n    }"
+}
+```
+
+#### Web 界面使用
+
+1. 访问 `http://localhost:19000`
+2. 在 **"Pipeline 文件上传"** 区域：
+   - **文件上传**: 点击 "选择文件" 上传 `.conf` 文件
+   - **直接粘贴**: 点击 "直接粘贴内容" 输入配置
+3. 系统自动解析并显示提取的 filter 预览
+4. 配置立即应用到测试环境，无需额外操作
+
+---
+
+### 🔧 2. 编辑 Filter 接口
 
 **端点**: `/save_filter`  
 **方法**: `POST`  
 **描述**: 保存 Logstash filter 配置，支持智能条件判断替换和热重载
+
+> ⚠️ **注意**: 此接口可能遇到 URL 编码问题（如 `+` 号变空格）和换行符处理问题。**推荐使用 `/upload_pipeline` 接口**以获得更好的体验。
 
 #### 请求参数
 
@@ -214,15 +406,27 @@ logstash-lab/
 #### 请求示例
 
 ```bash
-# 基本用法 - 保存简单的 grok filter
+# ✅ 推荐方式：使用 --data-urlencode 避免编码问题
+curl -X POST http://localhost:19000/save_filter \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "filter=grok { match => { \"message\" => \"%{COMBINEDAPACHELOG}\" } }"
+
+# ⚠️ 可能有问题：使用 -d 可能导致特殊字符编码错误
 curl -X POST http://localhost:19000/save_filter \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "filter=grok { match => { \"message\" => \"%{COMBINEDAPACHELOG}\" } }"
 
-# 完整的 filter 块（系统会自动处理条件判断）
+# ✅ 推荐方式：使用文件避免转义问题
+echo 'filter=grok { match => { "message" => "%{COMBINEDAPACHELOG}" } }' > /tmp/filter.txt
 curl -X POST http://localhost:19000/save_filter \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "filter=filter {
+  --data @/tmp/filter.txt
+
+# ❌ 复杂配置建议使用 /upload_pipeline 接口
+# 以下示例可能出现换行符丢失等问题
+curl -X POST http://localhost:19000/save_filter \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "filter=filter {
     if \"apache\" == [@metadata][type] {
       grok {
         match => { \"message\" => \"%{COMBINEDAPACHELOG}\" }
@@ -232,14 +436,15 @@ curl -X POST http://localhost:19000/save_filter \
       }
     }
   }"
-
-# JSON 格式的复杂 filter
-curl -X POST http://localhost:19000/save_filter \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "filter=json { source => \"message\" }
-      if [level] { mutate { uppercase => [\"level\"] } }
-      date { match => [\"timestamp\", \"ISO8601\"] }"
 ```
+
+#### URL 编码问题说明
+
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| `+` 号变空格 | `curl -d` 自动进行 URL 解码 | 使用 `--data-urlencode` 或手动编码为 `%2B` |
+| 换行符丢失 | Web 应用换行符处理 Bug | 使用 `/upload_pipeline` 接口 |
+| 特殊字符错误 | 多层转义导致语法错误 | 使用文件传输或 `/upload_pipeline` |
 
 #### 响应示例
 
@@ -259,7 +464,7 @@ curl -X POST http://localhost:19000/save_filter \
 
 ---
 
-### 📊 2. 获取解析结果接口
+### 📊 3. 获取解析结果接口
 
 **端点**: `/get_parsed_results`  
 **方法**: `GET`  
@@ -318,7 +523,7 @@ curl -s http://localhost:19000/get_parsed_results | jq '.events[] | {timestamp: 
 
 ---
 
-### 📋 3. 获取 Logstash 日志接口
+### 📋 4. 获取 Logstash 日志接口
 
 **端点**: `/logstash_logs`  
 **方法**: `GET`  
@@ -359,7 +564,7 @@ watch -n 5 'curl -s http://localhost:19000/logstash_logs | jq -r .logs | tail -2
 
 ---
 
-### 🧪 4. 发送测试日志接口
+### 🧪 5. 发送测试日志接口
 
 **端点**: `/test`  
 **方法**: `POST`  
@@ -375,26 +580,41 @@ watch -n 5 'curl -s http://localhost:19000/logstash_logs | jq -r .logs | tail -2
 #### 请求示例
 
 ```bash
-# 发送纯文本日志
+# ✅ 推荐方式：使用 --data-urlencode 避免特殊字符问题
 curl -X POST http://localhost:19000/test \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "logs=127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /index.html HTTP/1.1\" 200 2326"
+  --data-urlencode "logs=127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /index.html HTTP/1.1\" 200 2326"
 
-# 发送 JSON 格式日志
+# ✅ 发送包含 + 号的日志（时间戳、URL编码等）
 curl -X POST http://localhost:19000/test \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "logs={\"timestamp\": \"2023-12-25T10:00:00Z\", \"level\": \"info\", \"message\": \"用户登录成功\"}&is_json=1"
+  --data-urlencode "logs=<133>1 2025-09-10T12:08:07+08:00 SGPDRT-VSBRS01 BG 16703 - [meta sequenceId=\"46\"] session_data"
 
-# 发送多行日志
+# ✅ 发送 JSON 格式日志
 curl -X POST http://localhost:19000/test \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "logs=192.168.1.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /api/users HTTP/1.1\" 200 1024
-192.168.1.2 - - [25/Dec/2023:10:00:01 +0000] \"POST /api/login HTTP/1.1\" 401 512"
+  --data-urlencode "logs={\"timestamp\": \"2023-12-25T10:00:00Z\", \"level\": \"info\", \"message\": \"用户登录成功\"}" \
+  -d "is_json=1"
 
-# 发送 Syslog 格式
+# ⚠️ 不推荐：使用 -d 可能导致 + 号变空格
 curl -X POST http://localhost:19000/test \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "logs=Dec 25 10:00:00 server01 sshd[1234]: Accepted password for user from 192.168.1.100"
+  -d "logs=<133>1 2025-09-10T12:08:07+08:00 server BG 16703 - log_content"  # + 会变成空格
+
+# 🎯 完整测试流程示例
+# 1. 上传配置
+curl -X POST http://localhost:19000/upload_pipeline -F 'file=@bomgar.config'
+
+# 2. 清空结果
+curl -X POST http://localhost:19000/clear_results
+
+# 3. 发送测试日志
+curl -X POST http://localhost:19000/test \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "logs=<133>1 2025-09-10T12:08:07+08:00 SGPDRT-VSBRS01 BG 16703 - [meta sequenceId=\"46\"] 1427:01:01:event=logout;site=remote.cit.seabank.com.sg;target=rep_client;when=1757477287;who=unknown;who_ip=116.12.204.154"
+
+# 4. 获取解析结果
+curl -s http://localhost:19000/get_parsed_results | jq '.events[-1]'
 ```
 
 #### 响应示例
@@ -419,9 +639,17 @@ curl -X POST http://localhost:19000/test \
 }
 ```
 
+#### ⚠️ 重要提示
+
+| 问题类型 | 现象 | 解决方案 |
+|----------|------|----------|
+| **时间戳中的 `+` 号问题** | `2025-09-10T12:08:07+08:00` → `2025-09-10T12:08:07 08:00` | 使用 `--data-urlencode` 或手动编码为 `%2B` |
+| **特殊字符编码** | `&`, `=`, `%` 等被错误解释 | 使用 `--data-urlencode` |
+| **多行日志处理** | 换行符丢失或错误处理 | 使用 `--data-urlencode` 或文件传输 |
+
 ---
 
-### 🗑️ 5. 清空结果接口
+### 🗑️ 6. 清空结果接口
 
 **端点**: `/clear_results`  
 **方法**: `POST`  
@@ -612,6 +840,167 @@ async function testFilter() {
   "logs": "..."        // 可选，日志内容
 }
 ```
+
+## 🌊 MCP 服务器使用指南
+
+### 概述
+
+MCP (Model Context Protocol) 服务器为 AI 和自动化工具提供了标准化的 Logstash 测试接口。它支持：
+- 🚀 **文件上传**: 直接上传 Pipeline 配置文件
+- 🌊 **SSE 流式反馈**: 实时监控测试进度
+- ⚡ **自动化集成**: 标准 REST API 接口
+- 🔄 **智能替换**: 自动处理条件判断和元数据
+
+### 🌐 服务地址
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| **Web 界面** | http://localhost:19000 | 主要测试界面 |
+| **MCP 服务器** | http://localhost:19001 | AI 调用接口 |
+| **SSE 测试页面** | http://localhost:19001/test | 内置测试界面 |
+| **API 文档** | http://localhost:19001/docs | 完整 API 文档 |
+
+### 🚀 快速开始
+
+#### 1. 使用内置测试页面（推荐）
+
+```bash
+# 在浏览器中打开 SSE 测试页面
+open http://localhost:19001/test
+```
+
+这个页面提供了完整的可视化测试环境，包括：
+- Pipeline 配置编辑器
+- 测试日志输入框  
+- 实时 SSE 流式反馈
+- 步骤级进度追踪
+
+#### 2. 文件上传方式
+
+```bash
+# 上传 Pipeline 配置文件
+curl -X POST http://localhost:19001/tools/upload_pipeline \
+  -F 'file=@your_pipeline.conf'
+
+# 响应示例
+{
+  "success": true,
+  "message": "Pipeline 已成功上传并应用到测试环境",
+  "extracted_filters": 1,
+  "preview": "if \"test\" == [@metadata][type] { ... }"
+}
+```
+
+#### 3. SSE 流式测试
+
+```bash
+# 使用 curl 测试 SSE 连接（注意 -N 参数保持连接）
+curl -N "http://localhost:19001/sse/test_pipeline_complete?pipeline_content=filter{grok{match=>{\"message\"=>\"%{GREEDYDATA:content\"}}}&test_logs=[\"test log message\"]"
+```
+
+### 🔧 常见配置错误
+
+#### ❌ 错误的 SSE 配置
+
+```bash
+# 错误：缺少具体端点
+@http://192.168.31.218:19001/sse
+```
+
+#### ✅ 正确的配置
+
+```bash
+# 正确：SSE 流式测试端点
+http://192.168.31.218:19001/sse/test_pipeline_complete
+
+# 或者使用测试页面
+http://192.168.31.218:19001/test
+```
+
+### 🛠️ 故障排除
+
+#### Docker 构建缓存问题
+
+如果修改代码后容器没有更新，使用以下命令清理缓存：
+
+```bash
+# 清理 Docker 缓存
+sudo docker system prune -f
+
+# 强制重新构建
+sudo docker compose build --no-cache mcp-server
+
+# 重启服务
+sudo docker compose restart mcp-server
+```
+
+#### 服务健康检查
+
+```bash
+# 检查 MCP 服务器状态
+curl http://localhost:19001/tools/health_check
+
+# 检查容器状态
+sudo docker compose ps
+
+# 查看 MCP 服务器日志
+sudo docker compose logs -f mcp-server
+```
+
+#### 网络连接问题
+
+```bash
+# 检查端口是否正在监听
+sudo netstat -tlnp | grep 19001
+
+# 检查容器网络
+sudo docker network ls
+sudo docker network inspect logstash-lab_default
+```
+
+### 📋 MCP 工具列表
+
+| 工具名称 | 功能描述 | 输入格式 |
+|----------|----------|----------|
+| `upload_pipeline` | 上传 Pipeline 配置 | 文件/表单/JSON |
+| `send_test_log` | 发送测试日志 | JSON |
+| `get_parsed_results` | 获取解析结果 | GET |
+| `clear_results` | 清空测试结果 | POST |
+| `get_logstash_logs` | 获取 Logstash 日志 | GET |
+| `health_check` | 健康状态检查 | GET |
+| `test_pipeline_complete_stream` | SSE 流式完整测试 | SSE |
+
+### 🎯 AI 集成示例
+
+```python
+import requests
+import json
+
+# 上传 Pipeline 配置
+def upload_pipeline(config_file):
+    with open(config_file, 'rb') as f:
+        response = requests.post(
+            'http://localhost:19001/tools/upload_pipeline',
+            files={'file': f}
+        )
+    return response.json()
+
+# 发送测试日志
+def test_log(log_content):
+    response = requests.post(
+        'http://localhost:19001/tools/send_test_log',
+        json={'log_content': log_content}
+    )
+    return response.json()
+
+# 使用示例
+result = upload_pipeline('bomgar.conf')
+if result['success']:
+    test_result = test_log('test log message')
+    print(f"解析结果: {test_result['latest_event']}")
+```
+
+更多详细信息请参考：[MCP 服务器完整文档](mcp_server/README.md)
 
 ## 🔧 常用命令
 
@@ -808,6 +1197,11 @@ sudo docker compose restart logstash
 - [Elastic](https://www.elastic.co/) - 提供强大的 Logstash 引擎
 - [Flask](https://flask.palletsprojects.com/) - 简洁的 Python Web 框架
 - [Docker](https://www.docker.com/) - 容器化技术支持
+
+## 📚 相关文档
+
+- **[AI 集成指南](AI_INTEGRATION_GUIDE.md)**: 为第三方 AI 提供完整的调用指南
+- **[MCP 服务器文档](mcp_server/README.md)**: SSE 流式 MCP 服务器使用指南
 
 ---
 

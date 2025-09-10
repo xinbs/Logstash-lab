@@ -6,9 +6,90 @@
 
 ---
 
+## 🚀 快速开始 - MCP 集成 (推荐)
+
+### 🔗 **MCP (Model Context Protocol) 配置**
+
+**最佳实践**: 使用 MCP 协议可以让 AI 直接调用 Logstash 测试工具，无需编写复杂的 HTTP 请求代码。
+
+#### ✅ **支持的 AI 客户端**
+- Cursor
+- Claude Desktop  
+- 支持 MCP 协议的其他 AI 工具
+
+#### 🔧 **快速配置**
+
+**步骤 1**: 找到配置文件
+```bash
+# Cursor
+~/.cursor/mcp.json
+
+# Claude Desktop (macOS)  
+~/Library/Application Support/Claude/claude_desktop_config.json
+
+# Claude Desktop (Windows)
+%APPDATA%/Claude/claude_desktop_config.json
+```
+
+**步骤 2**: 添加配置（推荐 URL 方式）
+```json
+{
+  "mcpServers": {
+    "logstash-test": {
+      "url": "http://localhost:19001/mcp",
+      "description": "Logstash 规则测试和调试工具"
+    }
+  }
+}
+```
+
+**步骤 3**: 重启 AI 客户端
+
+#### 🎯 **可用工具 (8个)**
+1. **upload_pipeline** - 上传完整 Pipeline 配置文件
+2. **send_test_log** - 发送测试日志进行解析  
+3. **get_parsed_results** - 获取最新解析结果
+4. **clear_results** - 清空历史解析结果
+5. **get_logstash_logs** - 获取 Logstash 运行日志
+6. **test_pipeline_complete_stream** - 执行完整流式测试流程
+7. **get_test_guidance** - 获取智能测试指导 ✨
+8. **health_check** - 服务健康检查
+
+#### 💡 **智能测试指导**
+
+新增的 `get_test_guidance` 工具可以：
+- 🎯 **自动分析场景**：新建配置、调试修复、测试验证、性能优化
+- 📋 **提供步骤指导**：根据不同场景推荐最佳测试流程
+- 🔍 **配置智能分析**：检测 Grok、Ruby、Mutate、Date 插件并提供建议
+- 📊 **日志格式识别**：自动识别 Syslog、JSON 等格式
+- ⚠️ **常见问题预警**：提前提醒可能的问题和解决方案
+
+#### 🛠️ **兼容性配置**
+
+如果 URL 方式不工作，可以使用 curl 命令方式：
+```json
+{
+  "mcpServers": {
+    "logstash-test": {
+      "command": "curl",
+      "args": [
+        "-s", "-X", "POST",
+        "http://localhost:19001/mcp", 
+        "-H", "Content-Type: application/json",
+        "-d", "@-"
+      ],
+      "description": "Logstash 规则测试和调试工具"
+    }
+  }
+}
+```
+
+---
+
 ## 📋 服务概述
 
 ### 🎯 **服务功能**
+- **🌟 Pipeline 文件上传和解析**（推荐）
 - **Logstash Filter 规则编辑和验证**
 - **实时日志解析测试**
 - **解析结果获取和分析**
@@ -17,8 +98,11 @@
 
 ### 🌐 **服务地址**
 ```
-Base URL: http://localhost:19000
-Health Check: GET /get_parsed_results
+Web 服务: http://localhost:19000
+MCP 服务器: http://localhost:19001
+MCP JSON-RPC: POST http://localhost:19001/mcp
+SSE 测试页面: http://localhost:19001/test
+Health Check: GET http://localhost:19001/tools/health_check
 ```
 
 ### 🔑 **核心特性**
@@ -56,19 +140,95 @@ def check_service_health():
 
 ### 2️⃣ **基本调用工作流**
 
+#### 🌟 **推荐方式：MCP 服务器 Pipeline 文件上传工作流**
+
 ```bash
 #!/bin/bash
-# AI 自动化测试工作流
+# AI 自动化测试工作流 - MCP 服务器方式（推荐）
+
+MCP_URL="http://localhost:19001"
+WEB_URL="http://localhost:19000"
+
+# 1. 创建完整的 pipeline 配置文件
+cat > /tmp/test_pipeline.conf << 'EOF'
+input {
+  http {
+    port => 15515
+    additional_codecs => { "application/json" => "json" }
+  }
+}
+
+filter {
+  if "apache" == [@metadata][type] {
+    grok {
+      match => { "message" => "%{COMBINEDAPACHELOG}" }
+    }
+    mutate {
+      rename => { "clientip" => "src_ip" }
+      add_field => { "log_type" => "apache_access" }
+    }
+    date {
+      match => [ "timestamp", "dd/MMM/yyyy:HH:mm:ss Z" ]
+      target => "@timestamp"
+    }
+  }
+}
+
+output {
+  file {
+    path => "/data/out/events.ndjson"
+    codec => json_lines
+  }
+}
+EOF
+
+# 2. 清空历史数据
+curl -s -X POST "$BASE_URL/clear_results"
+
+# 3. 上传 pipeline 文件（使用 MCP 服务器，自动提取 filter 并应用）
+echo "📤 上传 Pipeline 配置..."
+response=$(curl -s -X POST "$MCP_URL/tools/upload_pipeline" -F 'file=@/tmp/test_pipeline.conf')
+echo "$response" | jq '.'
+
+if [ "$(echo "$response" | jq -r .success)" = "true" ]; then
+  echo "✅ Pipeline 上传成功"
+  echo "📋 提取的 filter 数量: $(echo "$response" | jq -r .extracted_filters)"
+else
+  echo "❌ Pipeline 上传失败: $(echo "$response" | jq -r .error)"
+  exit 1
+fi
+
+# 4. 等待热重载
+sleep 3
+
+# 5. 发送测试日志（使用 MCP 服务器）
+echo "🧪 发送测试日志..."
+test_response=$(curl -s -X POST "$MCP_URL/tools/send_test_log" \
+  -H "Content-Type: application/json" \
+  -d '{"log_content": "127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /index.html HTTP/1.1\" 200 2326"}')
+
+# 6. 获取解析结果
+curl -s "$BASE_URL/get_parsed_results" | jq '.'
+
+# 7. 清理临时文件
+rm -f /tmp/test_pipeline.conf
+```
+
+#### 🔧 **传统方式：直接 Filter 编辑工作流**
+
+```bash
+#!/bin/bash
+# AI 自动化测试工作流 - 传统方式
 
 BASE_URL="http://localhost:19000"
 
 # 1. 清空历史数据
 curl -s -X POST "$BASE_URL/clear_results"
 
-# 2. 保存 Filter 规则
+# 2. 保存 Filter 规则（使用 --data-urlencode 避免编码问题）
 curl -s -X POST "$BASE_URL/save_filter" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "filter=grok { match => { \"message\" => \"%{COMBINEDAPACHELOG}\" } }"
+  --data-urlencode "filter=grok { match => { \"message\" => \"%{COMBINEDAPACHELOG}\" } }"
 
 # 3. 等待热重载
 sleep 3
@@ -76,17 +236,283 @@ sleep 3
 # 4. 发送测试日志
 curl -s -X POST "$BASE_URL/test" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "logs=127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /index.html HTTP/1.1\" 200 2326"
+  --data-urlencode "logs=127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /index.html HTTP/1.1\" 200 2326"
 
 # 5. 获取解析结果
-curl -s "$BASE_URL/get_parsed_results" | jq .
+curl -s "$BASE_URL/get_parsed_results" | jq '.'
 ```
 
 ---
 
-## 🔧 API 接口详细说明
+## 🌊 MCP 服务器 API（推荐）
 
-### 🛠️ **1. 保存 Filter 规则**
+### 🎯 **MCP 服务器优势**
+
+MCP (Model Context Protocol) 服务器专为 AI 调用设计，提供更强大和便捷的接口：
+
+- 🚀 **文件上传支持**: 直接上传 Pipeline 配置文件，避免编码问题
+- 🌊 **SSE 流式反馈**: 实时监控测试进度，适合长时间运行的任务
+- 🛡️ **多格式支持**: 支持文件上传、表单和 JSON 三种输入方式
+- ⚡ **标准化错误处理**: 统一的错误响应格式
+- 🔄 **智能解析**: 自动提取 filter 块并替换条件判断
+
+### 🌟 **1. MCP Pipeline 上传接口**
+
+**端点**: `POST http://localhost:19001/tools/upload_pipeline`
+
+**支持的输入格式**:
+1. **文件上传** (推荐): `-F 'file=@config.conf'`
+2. **表单数据**: `-d 'pipeline=...'`  
+3. **JSON 格式**: `-d '{"pipeline_content": "..."}'`
+
+**AI 调用示例**:
+
+```python
+import requests
+
+# 方式1：文件上传（最推荐）
+def upload_pipeline_file(file_path):
+    with open(file_path, 'rb') as f:
+        response = requests.post(
+            'http://localhost:19001/tools/upload_pipeline',
+            files={'file': f}
+        )
+    return response.json()
+
+# 方式2：JSON 格式
+def upload_pipeline_json(pipeline_content):
+    response = requests.post(
+        'http://localhost:19001/tools/upload_pipeline',
+        json={'pipeline_content': pipeline_content}
+    )
+    return response.json()
+
+# 使用示例
+result = upload_pipeline_file('bomgar.conf')
+if result['success']:
+    print(f"✅ 上传成功: {result['message']}")
+    print(f"📋 提取的 filter 数量: {result['extracted_filters']}")
+    print(f"🔍 配置预览: {result['preview'][:100]}...")
+else:
+    print(f"❌ 上传失败: {result['error']}")
+```
+
+**响应格式**:
+```json
+{
+  "success": true,
+  "message": "Pipeline 已成功上传并应用到测试环境",
+  "extracted_filters": 1,
+  "preview": "if \"test\" == [@metadata][type] { ... }",
+  "raw_response": {
+    "ok": true,
+    "message": "Pipeline 已成功上传并应用到测试环境",
+    "extracted_filters": 1,
+    "applied_filter_preview": "详细的配置预览"
+  }
+}
+```
+
+### 🧪 **2. MCP 发送测试日志接口**
+
+**端点**: `POST http://localhost:19001/tools/send_test_log`
+
+**AI 调用示例**:
+
+```python
+def send_test_log(log_content, is_json=False):
+    response = requests.post(
+        'http://localhost:19001/tools/send_test_log',
+        json={
+            'log_content': log_content,
+            'is_json': is_json
+        }
+    )
+    return response.json()
+
+# 使用示例
+result = send_test_log('127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] "GET /index.html HTTP/1.1" 200 2326')
+if result['success']:
+    print(f"✅ 日志发送成功")
+    print(f"📊 最新解析结果: {result['latest_event']}")
+else:
+    print(f"❌ 发送失败: {result['error']}")
+```
+
+### 📊 **3. MCP 获取解析结果接口**
+
+**端点**: `GET http://localhost:19001/tools/get_parsed_results`
+
+```python
+def get_parsed_results():
+    response = requests.get('http://localhost:19001/tools/get_parsed_results')
+    return response.json()
+
+# 使用示例
+results = get_parsed_results()
+print(f"📈 总记录数: {results['events_count']}")
+for event in results['events']:
+    print(f"🕒 {event['@timestamp']}: {event.get('message', '')[:50]}...")
+```
+
+### 🔍 **4. MCP 健康检查接口**
+
+**端点**: `GET http://localhost:19001/tools/health_check`
+
+```python
+def health_check():
+    response = requests.get('http://localhost:19001/tools/health_check')
+    return response.json()
+
+# 使用示例
+health = health_check()
+if health['healthy']:
+    print(f"✅ 服务健康: {health['details']}")
+else:
+    print(f"❌ 服务异常: {health['details']}")
+```
+
+### 🌊 **5. SSE 流式测试接口**
+
+**端点**: `GET http://localhost:19001/sse/test_pipeline_complete`
+
+**适用场景**: 需要实时监控长时间运行测试流程的 AI 系统
+
+```python
+import requests
+import json
+
+def sse_test_pipeline(pipeline_content, test_logs):
+    params = {
+        'pipeline_content': pipeline_content,
+        'test_logs': json.dumps(test_logs),
+        'is_json': 'false',
+        'wait_time': '3'
+    }
+    
+    response = requests.get(
+        'http://localhost:19001/sse/test_pipeline_complete',
+        params=params,
+        stream=True,
+        headers={'Accept': 'text/event-stream'}
+    )
+    
+    for line in response.iter_lines(decode_unicode=True):
+        if line.startswith('data: '):
+            try:
+                event_data = json.loads(line[6:])  # 去掉 'data: ' 前缀
+                print(f"[{event_data['timestamp']}] {event_data['type']}: {event_data['data']['message']}")
+                
+                if event_data['type'] in ['complete', 'error']:
+                    break
+            except json.JSONDecodeError:
+                continue
+
+# 使用示例
+sse_test_pipeline(
+    pipeline_content="filter { grok { match => { \"message\" => \"%{GREEDYDATA:content}\" } } }",
+    test_logs=["test log message"]
+)
+```
+
+## 🔧 传统 Web API 接口
+
+以下是传统 Web 服务的 API 接口，仍然可用但建议优先使用 MCP 服务器：
+
+### 🌟 **1. Pipeline 文件上传接口（Web 版本）**
+
+**端点**: `POST /upload_pipeline`
+
+**功能**: 上传完整的 Logstash pipeline 配置文件，系统自动提取 filter 块并应用到测试环境
+
+**优势**:
+- ✅ **完全避免 URL 编码问题**: 不会出现 `+` 号变空格等编码问题
+- ✅ **保持原始格式**: 自动保留换行符、缩进和注释
+- ✅ **智能解析**: 自动识别和提取 filter 块，支持复杂嵌套结构
+- ✅ **双重支持**: 同时支持文件上传和文本内容粘贴
+
+**AI 调用示例**:
+```python
+import requests
+import tempfile
+import os
+
+def upload_pipeline_file(pipeline_content):
+    """方式一：文件上传"""
+    url = "http://localhost:19000/upload_pipeline"
+    
+    # 创建临时文件
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.conf', delete=False) as f:
+        f.write(pipeline_content)
+        temp_file = f.name
+    
+    try:
+        with open(temp_file, 'rb') as f:
+            files = {'file': ('pipeline.conf', f, 'text/plain')}
+            response = requests.post(url, files=files)
+        return response.json()
+    finally:
+        os.unlink(temp_file)
+
+def upload_pipeline_text(pipeline_content):
+    """方式二：文本内容上传"""
+    url = "http://localhost:19000/upload_pipeline"
+    data = {"pipeline": pipeline_content}
+    
+    response = requests.post(
+        url, 
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
+    return response.json()
+
+# 使用示例
+pipeline_config = """
+input {
+  udp {
+    port => 18136
+    codec => line {}
+    add_field => { "[@metadata][type]" => "bomgar" }
+  }
+}
+
+filter {
+  if "bomgar" == [@metadata][type] {
+    grok {
+      match => { "message" => "<%{POSINT:syslog_pri}>%{POSINT:syslog_ver} %{DATA:syslog_timestamp} %{GREEDYDATA:content}" }
+    }
+    mutate {
+      add_field => { "__source" => "bomgar", "log_type" => "bomgar_session" }
+      convert => { "syslog_pri" => "integer", "syslog_ver" => "integer" }
+    }
+  }
+}
+
+output {
+  kafka {
+    bootstrap_servers => "localhost:9092"
+    topic_id => "logs"
+  }
+}
+"""
+
+# 推荐使用文件上传方式
+result = upload_pipeline_file(pipeline_config)
+print(f"上传结果: {result['message']}")
+print(f"提取的 filter 预览: {result.get('applied_filter_preview', '')[:100]}...")
+```
+
+**响应格式**:
+```json
+{
+  "ok": true,
+  "message": "Pipeline 已成功上传并应用到测试环境",
+  "extracted_filters": 1,
+  "applied_filter_preview": "    if \"bomgar\" == [@metadata][type] {\n        grok {\n            match => { \"message\" => \"<%{POSINT:syslog_pri}>%{POSINT:syslog_ver}...\" }\n        }\n        # More filter rules...\n    }"
+}
+```
+
+### 🛠️ **2. 保存 Filter 规则（传统方式）**
 
 **端点**: `POST /save_filter`
 
@@ -144,7 +570,7 @@ print(f"保存结果: {result['message']}")
 }
 ```
 
-### 📊 **2. 发送测试日志**
+### 📊 **3. 发送测试日志**
 
 **端点**: `POST /test`
 
@@ -195,7 +621,7 @@ result = send_test_log(json_log, is_json=True)
 }
 ```
 
-### 📈 **3. 获取解析结果**
+### 📈 **4. 获取解析结果**
 
 **端点**: `GET /get_parsed_results`
 
@@ -251,7 +677,7 @@ def analyze_results():
 }
 ```
 
-### 📋 **4. 获取 Logstash 日志**
+### 📋 **5. 获取 Logstash 日志**
 
 **端点**: `GET /logstash_logs`
 
@@ -289,7 +715,7 @@ def check_for_errors():
     return False
 ```
 
-### 🗑️ **5. 清空解析结果**
+### 🗑️ **6. 清空解析结果**
 
 **端点**: `POST /clear_results`
 
@@ -337,8 +763,34 @@ class LogstashTestService:
         except:
             return False
     
+    def upload_pipeline(self, pipeline_content: str, use_file: bool = True) -> Dict:
+        """上传 Pipeline 配置（推荐方式）"""
+        url = f"{self.base_url}/upload_pipeline"
+        
+        if use_file:
+            # 方式一：文件上传（推荐）
+            import tempfile
+            import os
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.conf', delete=False) as f:
+                f.write(pipeline_content)
+                temp_file = f.name
+            
+            try:
+                with open(temp_file, 'rb') as f:
+                    files = {'file': ('pipeline.conf', f, 'text/plain')}
+                    response = requests.post(url, files=files)
+                return response.json()
+            finally:
+                os.unlink(temp_file)
+        else:
+            # 方式二：文本内容上传
+            data = {"pipeline": pipeline_content}
+            response = self.session.post(url, data=data)
+            return response.json()
+    
     def save_filter(self, filter_content: str) -> Dict:
-        """保存 Filter 规则"""
+        """保存 Filter 规则（传统方式）"""
         data = {"filter": filter_content}
         response = self.session.post(f"{self.base_url}/save_filter", data=data)
         return response.json()
@@ -367,6 +819,81 @@ class LogstashTestService:
         response = self.session.post(f"{self.base_url}/clear_results")
         return response.json()
     
+    def test_pipeline_with_logs(self, pipeline_content: str, test_logs: List[str], 
+                               is_json: bool = False, wait_time: int = 3, use_file: bool = True) -> Dict:
+        """
+        完整的 Pipeline 测试工作流：上传 pipeline -> 发送日志 -> 获取结果（推荐）
+        
+        Args:
+            pipeline_content: 完整的 Pipeline 配置内容
+            test_logs: 测试日志列表
+            is_json: 是否为 JSON 格式日志
+            wait_time: 等待热重载时间（秒）
+            use_file: 是否使用文件上传方式
+        
+        Returns:
+            包含测试结果的字典
+        """
+        result = {
+            "success": False,
+            "steps": {},
+            "parsed_events": [],
+            "errors": []
+        }
+        
+        try:
+            # 1. 健康检查
+            if not self.health_check():
+                result["errors"].append("服务不可用")
+                return result
+            result["steps"]["health_check"] = "✅ 服务可用"
+            
+            # 2. 清空历史结果
+            clear_resp = self.clear_results()
+            result["steps"]["clear_results"] = clear_resp.get("message", "清空完成")
+            
+            # 3. 上传 Pipeline
+            upload_resp = self.upload_pipeline(pipeline_content, use_file)
+            if not upload_resp.get("ok"):
+                result["errors"].append(f"Pipeline 上传失败: {upload_resp.get('message')}")
+                return result
+            result["steps"]["upload_pipeline"] = upload_resp.get("message")
+            
+            # 4. 等待热重载
+            time.sleep(wait_time)
+            result["steps"]["wait_reload"] = f"等待 {wait_time} 秒热重载"
+            
+            # 5. 发送测试日志
+            for i, log in enumerate(test_logs):
+                send_resp = self.send_test_log(log, is_json)
+                if send_resp.get("ok"):
+                    result["steps"][f"send_log_{i+1}"] = send_resp.get("message")
+                else:
+                    result["errors"].append(f"日志 {i+1} 发送失败: {send_resp.get('message')}")
+            
+            # 6. 获取解析结果
+            parsed_resp = self.get_parsed_results()
+            if parsed_resp.get("ok"):
+                result["parsed_events"] = parsed_resp.get("events", [])
+                result["steps"]["get_results"] = f"获取到 {len(result['parsed_events'])} 条解析记录"
+                result["success"] = True
+            else:
+                result["errors"].append(f"获取结果失败: {parsed_resp.get('message')}")
+            
+            # 7. 检查错误日志
+            logs_resp = self.get_logstash_logs()
+            if logs_resp.get("ok"):
+                logs_content = logs_resp.get("logs", "")
+                error_count = logs_content.upper().count("ERROR")
+                if error_count > 0:
+                    result["errors"].append(f"发现 {error_count} 个 Logstash 错误")
+                result["steps"]["check_logs"] = f"检查日志完成，错误数: {error_count}"
+            
+        except Exception as e:
+            result["errors"].append(f"执行异常: {str(e)}")
+        
+        return result
+
     def test_filter_with_logs(self, filter_content: str, test_logs: List[str], 
                              is_json: bool = False, wait_time: int = 3) -> Dict:
         """
@@ -485,18 +1012,40 @@ class LogstashTestService:
 
 # 使用示例
 def ai_test_example():
-    """AI 调用示例"""
+    """AI 调用示例 - 推荐使用 Pipeline 方式"""
     service = LogstashTestService()
     
-    # 测试 Apache 日志解析
-    apache_filter = """
+    # 🌟 推荐方式：使用完整的 Pipeline 配置
+    apache_pipeline = """
+input {
+  http {
+    port => 15515
+    additional_codecs => { "application/json" => "json" }
+  }
+}
+
+filter {
+  if "apache" == [@metadata][type] {
     grok {
       match => { "message" => "%{COMBINEDAPACHELOG}" }
     }
     mutate {
       rename => { "clientip" => "src_ip" }
-      add_field => { "log_type" => "apache" }
+      add_field => { "log_type" => "apache_access" }
     }
+    date {
+      match => [ "timestamp", "dd/MMM/yyyy:HH:mm:ss Z" ]
+      target => "@timestamp"
+    }
+  }
+}
+
+output {
+  file {
+    path => "/data/out/events.ndjson"
+    codec => json_lines
+  }
+}
     """
     
     apache_logs = [
@@ -504,11 +1053,11 @@ def ai_test_example():
         '192.168.1.100 - - [25/Dec/2023:10:00:01 +0000] "POST /api/login HTTP/1.1" 401 128'
     ]
     
-    # 执行测试
-    result = service.test_filter_with_logs(apache_filter, apache_logs)
+    # 🌟 执行 Pipeline 测试（推荐）
+    result = service.test_pipeline_with_logs(apache_pipeline, apache_logs)
     
     if result["success"]:
-        print("✅ 测试成功!")
+        print("✅ Pipeline 测试成功!")
         print("\n📋 执行步骤:")
         for step, message in result["steps"].items():
             print(f"  {step}: {message}")
@@ -526,12 +1075,53 @@ def ai_test_example():
             print(f"  {field}: {coverage}")
             
     else:
-        print("❌ 测试失败!")
+        print("❌ Pipeline 测试失败!")
+        for error in result["errors"]:
+            print(f"  错误: {error}")
+
+def ai_test_example_legacy():
+    """AI 调用示例 - 传统 Filter 方式"""
+    service = LogstashTestService()
+    
+    # 传统方式：仅使用 Filter 规则
+    apache_filter = """
+    grok {
+      match => { "message" => "%{COMBINEDAPACHELOG}" }
+    }
+    mutate {
+      rename => { "clientip" => "src_ip" }
+      add_field => { "log_type" => "apache" }
+    }
+    """
+    
+    apache_logs = [
+        '127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] "GET /index.html HTTP/1.1" 200 2326',
+        '192.168.1.100 - - [25/Dec/2023:10:00:01 +0000] "POST /api/login HTTP/1.1" 401 128'
+    ]
+    
+    # 执行传统测试
+    result = service.test_filter_with_logs(apache_filter, apache_logs)
+    
+    if result["success"]:
+        print("✅ Filter 测试成功!")
+        print(f"\n📊 解析结果: {len(result['parsed_events'])} 条记录")
+        
+        # 分析解析效果
+        analysis = service.analyze_parsing_effectiveness(result["parsed_events"])
+        print(f"\n📈 解析分析:")
+        for detail in analysis["details"]:
+            print(f"  {detail}")
+    else:
+        print("❌ Filter 测试失败!")
         for error in result["errors"]:
             print(f"  错误: {error}")
 
 if __name__ == "__main__":
+    # 推荐使用 Pipeline 方式
     ai_test_example()
+    
+    # 如果需要，也可以测试传统方式
+    # ai_test_example_legacy()
 ```
 
 ---
@@ -778,11 +1368,41 @@ def main():
     
     print("✅ 服务状态正常")
     
-    # 测试数据
-    test_cases = [
+    # 🌟 推荐测试数据：使用完整 Pipeline 配置
+    pipeline_test_cases = [
         {
-            "name": "Apache 访问日志",
-            "filter": 'grok { match => { "message" => "%{COMBINEDAPACHELOG}" } }',
+            "name": "Apache 访问日志 Pipeline",
+            "pipeline": """
+input {
+  http {
+    port => 15515
+    additional_codecs => { "application/json" => "json" }
+  }
+}
+
+filter {
+  if "apache" == [@metadata][type] {
+    grok {
+      match => { "message" => "%{COMBINEDAPACHELOG}" }
+    }
+    mutate {
+      rename => { "clientip" => "src_ip" }
+      add_field => { "log_type" => "apache_access" }
+    }
+    date {
+      match => [ "timestamp", "dd/MMM/yyyy:HH:mm:ss Z" ]
+      target => "@timestamp"
+    }
+  }
+}
+
+output {
+  file {
+    path => "/data/out/events.ndjson"
+    codec => json_lines
+  }
+}
+            """,
             "logs": [
                 '127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] "GET /index.html HTTP/1.1" 200 2326',
                 '192.168.1.100 - user [25/Dec/2023:10:00:01 +0000] "POST /api/login HTTP/1.1" 401 128'
@@ -790,8 +1410,39 @@ def main():
             "is_json": False
         },
         {
-            "name": "JSON 应用日志",
-            "filter": 'json { source => "message" } if [level] { mutate { uppercase => ["level"] } }',
+            "name": "JSON 应用日志 Pipeline",
+            "pipeline": """
+input {
+  http {
+    port => 15515
+    additional_codecs => { "application/json" => "json" }
+  }
+}
+
+filter {
+  if "json_app" == [@metadata][type] {
+    json {
+      source => "message"
+    }
+    if [level] {
+      mutate {
+        uppercase => ["level"]
+      }
+    }
+    date {
+      match => [ "timestamp", "ISO8601" ]
+      target => "@timestamp"
+    }
+  }
+}
+
+output {
+  file {
+    path => "/data/out/events.ndjson"
+    codec => json_lines
+  }
+}
+            """,
             "logs": [
                 '{"timestamp": "2023-12-25T10:00:00Z", "level": "info", "message": "用户登录成功", "user_id": 12345}',
                 '{"timestamp": "2023-12-25T10:00:01Z", "level": "error", "message": "数据库连接失败", "error_code": 500}'
@@ -803,12 +1454,13 @@ def main():
     # 执行测试
     all_results = []
     
-    for test_case in test_cases:
+    for test_case in pipeline_test_cases:
         print(f"\n🧪 测试: {test_case['name']}")
-        print(f"Filter: {test_case['filter'][:50]}...")
+        print(f"Pipeline: {test_case['pipeline'][:100]}...")
         
-        result = service.test_filter_with_logs(
-            test_case['filter'],
+        # 🌟 使用 Pipeline 测试方法（推荐）
+        result = service.test_pipeline_with_logs(
+            test_case['pipeline'],
             test_case['logs'],
             is_json=test_case['is_json']
         )
@@ -861,6 +1513,10 @@ def main():
             print(f"   错误: {'; '.join(result['errors'])}")
     
     print("\n🎉 AI 集成测试完成!")
+    print("\n💡 **最佳实践提示**:")
+    print("• 优先使用 service.test_pipeline_with_logs() 方法")
+    print("• 避免 URL 编码问题，获得更好的测试体验") 
+    print("• 如需使用传统方式，记得在 curl 命令中使用 --data-urlencode")
 
 if __name__ == "__main__":
     main()

@@ -197,6 +197,40 @@
                     </div>
                 </form>
                 
+                <!-- Pipeline 文件上传 -->
+                <div style="margin-top: 24px; padding: 16px; background-color: #f8f9fa; border-radius: 4px; border-left: 4px solid #28a745;">
+                    <h4 style="margin-top: 0; color: #155724;">📁 Pipeline 文件上传</h4>
+                    <p style="margin-bottom: 12px; font-size: 14px; color: #155724;">
+                        上传完整的 Logstash pipeline 配置文件，系统会自动提取其中的 filter 块并应用到测试环境
+                    </p>
+                    
+                    <form id="pipelineUploadForm" enctype="multipart/form-data">
+                        <div style="margin-bottom: 12px;">
+                            <input type="file" id="pipelineFile" name="file" accept=".conf,.txt" style="margin-bottom: 8px;">
+                        </div>
+                        <div>
+                            <button type="submit" class="btn-success">📤 上传 Pipeline 文件</button>
+                            <button type="button" onclick="showPipelineTextarea()" class="btn-warning" style="margin-left: 8px;">📝 直接粘贴内容</button>
+                        </div>
+                    </form>
+                    
+                    <!-- 文本输入模式 -->
+                    <div id="pipelineTextInput" style="display: none; margin-top: 16px;">
+                        <form id="pipelineTextForm">
+                            <textarea 
+                                name="pipeline" 
+                                id="pipelineContent" 
+                                placeholder="请粘贴完整的 Logstash pipeline 配置内容..."
+                                style="height: 200px; font-family: 'Courier New', monospace; font-size: 12px;"
+                            ></textarea>
+                            <div style="margin-top: 8px;">
+                                <button type="submit" class="btn-success">🚀 解析并应用 Pipeline</button>
+                                <button type="button" onclick="hidePipelineTextarea()" class="btn" style="margin-left: 8px;">❌ 取消</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                
                 <div class="filter-examples">
                     <strong>📚 示例模板：</strong><br>
                     <button type="button" class="example-btn" onclick="loadExample('apache')">Apache 日志</button>
@@ -494,6 +528,105 @@ date {
             saveFormData(); // 保存加载的示例数据
             showMessage(`已加载 ${type} 示例模板和测试日志 (自动添加条件: if "test" == [@metadata][type])`, 'success');
         }
+        
+        // Pipeline 文件上传功能
+        function showPipelineTextarea() {
+            document.getElementById('pipelineTextInput').style.display = 'block';
+        }
+        
+        function hidePipelineTextarea() {
+            document.getElementById('pipelineTextInput').style.display = 'none';
+            document.getElementById('pipelineContent').value = '';
+        }
+        
+        // 处理文件上传表单
+        document.getElementById('pipelineUploadForm').onsubmit = async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('pipelineFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showMessage('请选择一个 pipeline 配置文件', 'error');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                showMessage('正在上传并解析 pipeline 文件...', 'success');
+                
+                const response = await fetch('/upload_pipeline', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.ok) {
+                    showMessage(result.message, 'success');
+                    
+                    // 显示提取的 filter 预览
+                    if (result.applied_filter_preview) {
+                        const filterTextarea = document.getElementById('filter');
+                        filterTextarea.value = result.applied_filter_preview;
+                        saveFormData();
+                    }
+                    
+                    // 清空文件输入
+                    fileInput.value = '';
+                } else {
+                    showMessage(result.message || '上传失败', 'error');
+                }
+            } catch (error) {
+                showMessage('上传过程中发生错误: ' + error.message, 'error');
+            }
+        };
+        
+        // 处理文本内容表单
+        document.getElementById('pipelineTextForm').onsubmit = async function(e) {
+            e.preventDefault();
+            
+            const pipelineContent = document.getElementById('pipelineContent').value.trim();
+            
+            if (!pipelineContent) {
+                showMessage('请输入 pipeline 配置内容', 'error');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('pipeline', pipelineContent);
+            
+            try {
+                showMessage('正在解析 pipeline 内容...', 'success');
+                
+                const response = await fetch('/upload_pipeline', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.ok) {
+                    showMessage(result.message, 'success');
+                    
+                    // 显示提取的 filter 预览
+                    if (result.applied_filter_preview) {
+                        const filterTextarea = document.getElementById('filter');
+                        filterTextarea.value = result.applied_filter_preview;
+                        saveFormData();
+                    }
+                    
+                    // 隐藏文本输入区域
+                    hidePipelineTextarea();
+                } else {
+                    showMessage(result.message || '解析失败', 'error');
+                }
+            } catch (error) {
+                showMessage('解析过程中发生错误: ' + error.message, 'error');
+            }
+        };
     </script>
 </body>
 </html>

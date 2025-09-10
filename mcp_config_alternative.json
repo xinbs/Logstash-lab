@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "logstash-test": {
+      "command": "curl",
+      "args": [
+        "-X", "POST",
+        "http://192.168.31.218:19001/mcp",
+        "-H", "Content-Type: application/json",
+        "-d"
+      ],
+      "env": {},
+      "description": "Logstash 规则测试和调试工具"
+    }
+  }
+}
