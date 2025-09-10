@@ -187,24 +187,429 @@ logstash-lab/
 
 ## 📋 API 文档
 
-### 核心 API 端点
+### 核心 API 端点概览
 
-| 端点 | 方法 | 描述 | 示例 |
+| 端点 | 方法 | 描述 | 状态码 |
+|------|------|------|--------|
+| `/save_filter` | POST | 保存和更新 filter 配置 | 200 |
+| `/test` | POST | 发送测试日志并获取解析结果 | 200 |
+| `/get_parsed_results` | GET | 获取最新的解析记录 | 200 |
+| `/logstash_logs` | GET | 获取 Logstash 运行日志 | 200 |
+| `/clear_results` | POST | 清空解析结果文件 | 200 |
+
+---
+
+### 🔧 1. 编辑 Filter 接口
+
+**端点**: `/save_filter`  
+**方法**: `POST`  
+**描述**: 保存 Logstash filter 配置，支持智能条件判断替换和热重载
+
+#### 请求参数
+
+| 参数 | 类型 | 必需 | 描述 |
 |------|------|------|------|
-| `/save_filter` | POST | 保存 filter 配置 | `curl -X POST -d "filter=..." localhost:19000/save_filter` |
-| `/test` | POST | 发送测试日志 | `curl -X POST -d "logs=test log" localhost:19000/test` |
-| `/get_parsed_results` | GET | 获取解析记录 | `curl localhost:19000/get_parsed_results` |
-| `/logstash_logs` | GET | 获取 Logstash 日志 | `curl localhost:19000/logstash_logs` |
-| `/clear_results` | POST | 清空结果文件 | `curl -X POST localhost:19000/clear_results` |
+| `filter` | string | 是 | Logstash filter 配置内容 |
 
-### API 响应格式
+#### 请求示例
+
+```bash
+# 基本用法 - 保存简单的 grok filter
+curl -X POST http://localhost:19000/save_filter \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "filter=grok { match => { \"message\" => \"%{COMBINEDAPACHELOG}\" } }"
+
+# 完整的 filter 块（系统会自动处理条件判断）
+curl -X POST http://localhost:19000/save_filter \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "filter=filter {
+    if \"apache\" == [@metadata][type] {
+      grok {
+        match => { \"message\" => \"%{COMBINEDAPACHELOG}\" }
+      }
+      mutate {
+        rename => { \"clientip\" => \"src_ip\" }
+      }
+    }
+  }"
+
+# JSON 格式的复杂 filter
+curl -X POST http://localhost:19000/save_filter \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "filter=json { source => \"message\" }
+      if [level] { mutate { uppercase => [\"level\"] } }
+      date { match => [\"timestamp\", \"ISO8601\"] }"
+```
+
+#### 响应示例
 
 ```json
 {
   "ok": true,
-  "message": "操作成功",
-  "data": {...},
-  "count": 10
+  "message": "Filter 已保存并自动重载 (已自动添加条件判断: if \"test\" == [@metadata][type])"
+}
+```
+
+#### 智能功能说明
+
+- **自动条件判断替换**: 任何 `if "xxx" == [@metadata][type]` 会自动替换为 `if "test" == [@metadata][type]`
+- **元数据自动设置**: 系统自动设置 `[@metadata][type] = "test"`
+- **热重载**: 配置保存后 3 秒内自动生效
+- **语法验证**: 保存时自动检查 Logstash 配置语法
+
+---
+
+### 📊 2. 获取解析结果接口
+
+**端点**: `/get_parsed_results`  
+**方法**: `GET`  
+**描述**: 获取最新的解析记录，支持实时查看处理结果
+
+#### 请求示例
+
+```bash
+# 获取最新解析记录
+curl http://localhost:19000/get_parsed_results
+
+# 使用 jq 美化输出
+curl -s http://localhost:19000/get_parsed_results | jq .
+
+# 只获取记录数量
+curl -s http://localhost:19000/get_parsed_results | jq .count
+
+# 获取特定字段
+curl -s http://localhost:19000/get_parsed_results | jq '.events[] | {timestamp: .["@timestamp"], message: .message}'
+```
+
+#### 响应示例
+
+```json
+{
+  "ok": true,
+  "events": [
+    {
+      "@timestamp": "2024-12-25T10:00:00.000Z",
+      "message": "127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /index.html HTTP/1.1\" 200 2326",
+      "clientip": "127.0.0.1",
+      "verb": "GET",
+      "request": "/index.html",
+      "httpversion": "1.1",
+      "response": "200",
+      "bytes": "2326",
+      "src_ip": "127.0.0.1",
+      "__source": "test",
+      "_parsed_time": "2024-12-25 10:00:15",
+      "host": {
+        "name": "logstash-container"
+      }
+    }
+  ],
+  "count": 1,
+  "message": "成功获取 1 条解析记录"
+}
+```
+
+#### 功能特性
+
+- **最新记录**: 获取最后 50 条解析记录
+- **时间戳**: 每条记录包含 `_parsed_time` 解析时间
+- **字段完整**: 包含所有 filter 处理后的字段
+- **实时更新**: 支持轮询获取最新数据
+
+---
+
+### 📋 3. 获取 Logstash 日志接口
+
+**端点**: `/logstash_logs`  
+**方法**: `GET`  
+**描述**: 获取 Logstash 运行日志，用于调试和问题排查
+
+#### 请求示例
+
+```bash
+# 获取 Logstash 日志
+curl http://localhost:19000/logstash_logs
+
+# 保存日志到文件
+curl -s http://localhost:19000/logstash_logs | jq -r .logs > logstash.log
+
+# 检查错误信息
+curl -s http://localhost:19000/logstash_logs | jq -r .logs | grep -i error
+
+# 实时监控（每5秒刷新）
+watch -n 5 'curl -s http://localhost:19000/logstash_logs | jq -r .logs | tail -20'
+```
+
+#### 响应示例
+
+```json
+{
+  "ok": true,
+  "logs": "📋 Logstash 容器日志 (Docker API)\n📅 获取时间: 2024-12-25 10:00:15\n📊 显示最近 50 条日志\n================================================================================\n[2024-12-25T10:00:00,123][INFO ][logstash.agent           ] Successfully started Logstash API endpoint {:port=>9600}\n[2024-12-25T10:00:01,456][INFO ][logstash.runner          ] Starting Logstash {\"logstash.version\"=>\"8.14.2\"}\n[2024-12-25T10:00:02,789][INFO ][logstash.javapipeline    ][test] Pipeline started {\"pipeline.id\"=>\"test\"}\n[2024-12-25T10:00:03,012][INFO ][logstash.inputs.http     ][test] Starting http input listener {:address=>\"0.0.0.0:15515\"}\n[2024-12-25T10:00:05,345][INFO ][logstash.pipeline        ][test] Pipeline successfully reloaded"
+}
+```
+
+#### 日志内容说明
+
+- **启动信息**: Logstash 服务启动状态
+- **Pipeline 状态**: 管道加载和重载信息
+- **错误信息**: 配置语法错误和运行异常
+- **性能信息**: 处理速度和内存使用
+- **网络状态**: HTTP 输入端口监听状态
+
+---
+
+### 🧪 4. 发送测试日志接口
+
+**端点**: `/test`  
+**方法**: `POST`  
+**描述**: 发送测试日志到 Logstash 并获取解析结果
+
+#### 请求参数
+
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `logs` | string | 是 | 要测试的日志内容 |
+| `is_json` | string | 否 | 是否为 JSON 格式 (值为 "1" 表示是) |
+
+#### 请求示例
+
+```bash
+# 发送纯文本日志
+curl -X POST http://localhost:19000/test \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "logs=127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /index.html HTTP/1.1\" 200 2326"
+
+# 发送 JSON 格式日志
+curl -X POST http://localhost:19000/test \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "logs={\"timestamp\": \"2023-12-25T10:00:00Z\", \"level\": \"info\", \"message\": \"用户登录成功\"}&is_json=1"
+
+# 发送多行日志
+curl -X POST http://localhost:19000/test \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "logs=192.168.1.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /api/users HTTP/1.1\" 200 1024
+192.168.1.2 - - [25/Dec/2023:10:00:01 +0000] \"POST /api/login HTTP/1.1\" 401 512"
+
+# 发送 Syslog 格式
+curl -X POST http://localhost:19000/test \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "logs=Dec 25 10:00:00 server01 sshd[1234]: Accepted password for user from 192.168.1.100"
+```
+
+#### 响应示例
+
+```json
+{
+  "ok": true,
+  "message": "✅ 日志发送成功",
+  "events": [
+    {
+      "@timestamp": "2024-12-25T10:00:00.000Z",
+      "message": "127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /index.html HTTP/1.1\" 200 2326",
+      "clientip": "127.0.0.1",
+      "verb": "GET",
+      "request": "/index.html",
+      "httpversion": "1.1",
+      "response": "200",
+      "bytes": "2326",
+      "src_ip": "127.0.0.1"
+    }
+  ]
+}
+```
+
+---
+
+### 🗑️ 5. 清空结果接口
+
+**端点**: `/clear_results`  
+**方法**: `POST`  
+**描述**: 清空解析结果文件，用于重新开始测试
+
+#### 请求示例
+
+```bash
+# 清空解析结果
+curl -X POST http://localhost:19000/clear_results
+
+# 清空并确认
+curl -X POST http://localhost:19000/clear_results && \
+curl http://localhost:19000/get_parsed_results | jq .count
+```
+
+#### 响应示例
+
+```json
+{
+  "ok": true,
+  "message": "结果已清空"
+}
+```
+
+---
+
+### 📡 API 使用最佳实践
+
+#### 🔄 **完整的测试工作流**
+
+```bash
+#!/bin/bash
+# Logstash 规则测试脚本
+
+BASE_URL="http://localhost:19000"
+
+echo "🧹 1. 清空历史结果"
+curl -s -X POST "$BASE_URL/clear_results" | jq .message
+
+echo -e "\n🔧 2. 更新 Filter 规则"
+curl -s -X POST "$BASE_URL/save_filter" \
+  -d "filter=grok { match => { \"message\" => \"%{COMBINEDAPACHELOG}\" } }" \
+  | jq .message
+
+echo -e "\n⏱️ 3. 等待热重载完成"
+sleep 3
+
+echo -e "\n🧪 4. 发送测试日志"
+curl -s -X POST "$BASE_URL/test" \
+  -d "logs=127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] \"GET /index.html HTTP/1.1\" 200 2326" \
+  | jq .message
+
+echo -e "\n📊 5. 获取解析结果"
+curl -s "$BASE_URL/get_parsed_results" | jq '.events[] | {client: .clientip, method: .verb, path: .request}'
+
+echo -e "\n📋 6. 检查 Logstash 日志"
+curl -s "$BASE_URL/logstash_logs" | jq -r .logs | tail -5
+```
+
+#### 🔍 **错误处理示例**
+
+```bash
+# 检查 API 响应状态
+response=$(curl -s -X POST http://localhost:19000/save_filter -d "filter=invalid syntax")
+status=$(echo "$response" | jq -r .ok)
+
+if [ "$status" = "true" ]; then
+  echo "✅ Filter 保存成功"
+else
+  echo "❌ Filter 保存失败: $(echo "$response" | jq -r .message)"
+fi
+
+# 检查服务是否运行
+if curl -s http://localhost:19000/get_parsed_results > /dev/null; then
+  echo "✅ 服务运行正常"
+else
+  echo "❌ 服务不可访问，请检查容器状态"
+fi
+```
+
+#### 📈 **性能监控脚本**
+
+```bash
+#!/bin/bash
+# 监控 Logstash 性能
+
+while true; do
+  # 获取当前记录数
+  count=$(curl -s http://localhost:19000/get_parsed_results | jq .count)
+  
+  # 检查内存使用
+  memory=$(docker stats logstash-lab-logstash --no-stream --format "table {{.MemUsage}}" | tail -1)
+  
+  # 检查错误日志
+  errors=$(curl -s http://localhost:19000/logstash_logs | jq -r .logs | grep -c ERROR || echo 0)
+  
+  echo "$(date): 记录数=$count, 内存=$memory, 错误=$errors"
+  sleep 10
+done
+```
+
+### 🌐 前端 JavaScript 集成
+
+```javascript
+// Logstash API 客户端类
+class LogstashAPI {
+  constructor(baseURL = 'http://localhost:19000') {
+    this.baseURL = baseURL;
+  }
+
+  // 保存 filter 配置
+  async saveFilter(filterContent) {
+    const response = await fetch(`${this.baseURL}/save_filter`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `filter=${encodeURIComponent(filterContent)}`
+    });
+    return response.json();
+  }
+
+  // 发送测试日志
+  async sendTestLog(logs, isJSON = false) {
+    const body = `logs=${encodeURIComponent(logs)}${isJSON ? '&is_json=1' : ''}`;
+    const response = await fetch(`${this.baseURL}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body
+    });
+    return response.json();
+  }
+
+  // 获取解析结果
+  async getParsedResults() {
+    const response = await fetch(`${this.baseURL}/get_parsed_results`);
+    return response.json();
+  }
+
+  // 获取 Logstash 日志
+  async getLogstashLogs() {
+    const response = await fetch(`${this.baseURL}/logstash_logs`);
+    return response.json();
+  }
+
+  // 清空结果
+  async clearResults() {
+    const response = await fetch(`${this.baseURL}/clear_results`, { method: 'POST' });
+    return response.json();
+  }
+}
+
+// 使用示例
+const api = new LogstashAPI();
+
+// 保存 filter 并测试
+async function testFilter() {
+  try {
+    // 1. 保存 filter
+    await api.saveFilter('grok { match => { "message" => "%{COMBINEDAPACHELOG}" } }');
+    
+    // 2. 等待重载
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // 3. 发送测试日志
+    const testResult = await api.sendTestLog('127.0.0.1 - - [25/Dec/2023:10:00:00 +0000] "GET /index.html HTTP/1.1" 200 2326');
+    
+    // 4. 获取解析结果
+    const results = await api.getParsedResults();
+    
+    console.log('解析结果:', results.events);
+  } catch (error) {
+    console.error('测试失败:', error);
+  }
+}
+```
+
+### 通用响应格式
+
+所有 API 端点都返回统一的 JSON 格式：
+
+```json
+{
+  "ok": true|false,
+  "message": "操作状态描述",
+  "data": {...},       // 可选，具体数据
+  "events": [...],     // 可选，事件数组
+  "count": 0,          // 可选，记录数量
+  "logs": "..."        // 可选，日志内容
 }
 ```
 
