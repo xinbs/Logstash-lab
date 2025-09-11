@@ -400,7 +400,15 @@ class LogstashMCPServer:
         for step in steps:
             guidance.append(f"   {step}")
         
-        # 3. 具体建议
+        # 3. 重要提示
+        guidance.append("\n## ⚡ **重要提示 - 自动化特性**")
+        guidance.append("🔄 **条件判断自动替换**: 系统会自动处理 `if` 条件判断")
+        guidance.append("• 无论您输入 `if \"xxx\" == [@metadata][type]` 中的任何值")
+        guidance.append("• 系统都会自动替换为 `if \"test\" == [@metadata][type]`")
+        guidance.append("• 同时自动设置 `[@metadata][type] = \"test\"`")
+        guidance.append("• **您无需担心条件匹配问题，专注编写 filter 逻辑即可**")
+        
+        # 4. 具体建议
         guidance.append("\n## 💡 **具体建议**")
         
         if pipeline_content:
@@ -641,7 +649,7 @@ def mcp_handler():
                     "tools": [
                         {
                             "name": "upload_pipeline",
-                            "description": "上传完整的 Logstash Pipeline 配置文件，自动提取 filter 块并应用到测试环境",
+                            "description": "上传完整的 Logstash Pipeline 配置文件，自动提取 filter 块并应用到测试环境。重要：系统会自动将任何 if \"xxx\" == [@metadata][type] 条件替换为 if \"test\" == [@metadata][type]，您无需担心条件匹配问题",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
