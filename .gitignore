@@ -53,3 +53,4 @@ config/secrets.yml
 test_*.log
 sample_*.log
 bomgar.config
+logstash/pipeline/test.conf

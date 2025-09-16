@@ -453,6 +453,232 @@ class LogstashMCPServer:
         guidance.append("💬 **提示**: 您可以要求我按照上述步骤自动执行测试，我会使用相应的工具来完成！")
         
         return "\n".join(guidance)
+    
+    def _generate_prompt_content(self, prompt_name: str, prompt_args: Dict[str, Any]) -> str:
+        """生成具体的提示内容"""
+        
+        if prompt_name == "test_existing_config":
+            config_type = prompt_args.get("config_type", "pipeline")
+            return f"""请帮我测试现有的 Logstash 配置文件。
+
+📋 **测试任务**:
+- 配置类型: {config_type}
+- 验证配置语法是否正确
+- 测试实际日志解析效果
+- 检查字段提取和类型转换
+
+🔧 **推荐测试流程**:
+1. **上传配置**: 使用 `upload_pipeline` 工具上传您的配置文件
+2. **清空现有解析记录**: 使用 `clear_results` 清理历史数据
+3. **发送测试日志**: 使用 `send_test_log` 发送样本日志进行测试
+4. **检查解析结果**: 使用 `get_parsed_results` 查看解析输出
+5. **查看错误日志**: 如有问题使用 `get_logstash_logs` 查看详细错误
+6. **健康检查**: 使用 `health_check` 确认服务状态
+
+⚡ **重要提示**: 
+- 系统会自动处理 `if "xxx" == [@metadata][type]` 条件替换
+- 您无需担心条件匹配问题，专注测试解析逻辑
+- 可以使用 `test_pipeline_complete_stream` 进行一站式流式测试
+
+请提供您的配置文件，我会帮您完成测试。"""
+
+        elif prompt_name == "test_log_matching":
+            log_type = prompt_args.get("log_type", "custom")
+            return f"""请帮我测试日志与配置的匹配效果。
+
+📋 **匹配测试任务**:
+- 日志类型: {log_type}
+- 验证日志格式与配置的兼容性
+- 检查字段提取完整性和准确性
+- 测试边界情况和异常日志
+
+🧪 **测试步骤**:
+1. **准备测试数据**: 提供多条不同格式的样本日志
+2. **清空现有解析记录**: 使用 `clear_results` 确保测试环境干净
+3. **发送测试日志**: 使用 `send_test_log` 逐条测试
+4. **分析解析结果**: 使用 `get_parsed_results` 检查每条日志的解析效果
+5. **对比期望输出**: 验证提取的字段是否符合预期
+6. **批量测试**: 使用 `test_pipeline_complete_stream` 批量测试多条日志
+
+🎯 **关注重点**:
+- 字段提取是否完整
+- 数据类型转换是否正确
+- 时间解析是否准确
+- 异常日志的处理情况
+
+⚡ **自动化特性**: 
+- 条件判断自动替换，无需关心 `[@metadata][type]` 匹配
+- 专注验证解析逻辑的正确性
+
+请提供您的样本日志，我会帮您测试匹配效果。"""
+
+        elif prompt_name == "debug_parsing_failure":
+            error_type = prompt_args.get("error_type", "通用解析错误")
+            return f"""帮我调试日志解析失败问题。
+
+📋 **故障诊断**:
+- 错误类型: {error_type}
+- 分析解析失败的根本原因
+- 提供具体的修复建议
+- 验证修复效果
+
+🔍 **诊断流程**:
+1. **获取错误信息**: 使用 `get_logstash_logs` 查看详细错误日志
+2. **清空历史数据**: 使用 `clear_results` 清理旧的测试结果
+3. **重现问题**: 使用 `send_test_log` 发送失败的日志样本
+4. **分析错误模式**: 检查 `get_parsed_results` 中的错误标记
+5. **验证修复**: 修改配置后重新测试
+
+🚨 **常见解析失败原因**:
+- **Grok 模式不匹配**: 正则表达式与日志格式不符
+- **字段名冲突**: 多个插件定义了相同字段
+- **类型转换错误**: 数据类型转换失败
+- **日期解析失败**: 时间格式不匹配
+- **编码问题**: 特殊字符或编码导致解析异常
+
+🔧 **调试技巧**:
+- 使用简化的 Grok 模式逐步调试
+- 检查转义字符的正确性
+- 验证字段命名的一致性
+
+请提供失败的日志样本和错误信息，我会帮您定位并解决问题。"""
+
+        elif prompt_name == "compare_before_after":
+            modification_type = prompt_args.get("modification_type", "配置优化")
+            return f"""帮我比较配置修改前后的解析效果。
+
+📋 **对比测试任务**:
+- 修改类型: {modification_type}
+- 验证修改是否达到预期效果
+- 确保不引入新的解析问题
+- 评估性能和准确性改进
+
+🔄 **对比测试流程**:
+1. **保存原始结果**: 
+   - 使用当前配置测试样本日志
+   - 保存 `get_parsed_results` 的输出作为基准
+2. **应用新配置**:
+   - 使用 `upload_pipeline` 上传修改后的配置
+   - 使用相同日志进行测试
+3. **结果对比**:
+   - 对比修改前后的字段提取结果
+   - 检查新增、删除或修改的字段
+   - 验证数据准确性和完整性
+4. **性能评估**:
+   - 使用 `test_pipeline_complete_stream` 测试处理速度
+   - 检查资源消耗情况
+
+📊 **对比维度**:
+- ✅ **字段完整性**: 必要字段是否都被正确提取
+- ✅ **数据准确性**: 提取的值是否正确
+- ✅ **类型转换**: 数据类型是否符合预期
+- ✅ **性能表现**: 处理速度是否有改善
+- ✅ **错误率**: 解析失败的日志是否减少
+
+⚡ **自动化优势**: 
+- 系统自动处理条件判断，确保测试一致性
+- 可以快速切换和对比不同配置版本
+
+请提供修改前后的配置和测试日志，我会帮您完成详细对比。"""
+
+        elif prompt_name == "validate_field_extraction":
+            expected_fields = prompt_args.get("expected_fields", "所有字段")
+            return f"""帮我验证字段提取是否正确。
+
+📋 **字段验证任务**:
+- 期望字段: {expected_fields}
+- 验证字段提取的完整性和准确性
+- 检查数据类型转换是否正确
+- 确认字段映射关系
+
+✅ **验证检查项**:
+1. **字段存在性**: 所有期望的字段都被提取
+2. **字段值准确性**: 提取的值与日志内容匹配
+3. **数据类型正确性**: 数值、日期、字符串类型转换正确
+4. **字段命名规范**: 字段名符合预期的命名约定
+5. **特殊字段处理**: 时间戳、IP地址等特殊字段格式正确
+
+🧪 **验证流程**:
+1. **清空现有解析记录**: 使用 `clear_results` 确保测试环境干净
+2. **发送测试日志**: 使用 `send_test_log` 发送包含所有字段的日志样本
+3. **获取解析结果**: 使用 `get_parsed_results` 查看提取的字段
+4. **逐字段检查**: 验证每个字段的存在性和值的正确性
+5. **类型验证**: 检查数值字段是否为数字类型，日期是否正确解析
+6. **边界测试**: 测试缺失字段、空值、特殊字符的处理
+
+📝 **验证报告**:
+- ✅ 正确提取的字段列表
+- ❌ 缺失或错误的字段
+- 🔄 需要修改的配置建议
+- 📊 字段提取完整性评分
+
+⚡ **系统特性**: 
+- 自动条件判断替换，确保测试环境一致
+- 可以重复测试和验证不同的日志样本
+
+请提供您的期望字段列表和测试日志，我会帮您完成详细验证。"""
+
+        elif prompt_name == "batch_test_logs":
+            test_scenario = prompt_args.get("test_scenario", "综合测试")
+            return f"""帮我批量测试多条日志记录。
+
+📋 **批量测试任务**:
+- 测试场景: {test_scenario}
+- 验证配置对不同日志的处理能力
+- 识别潜在的解析问题和边界情况
+- 评估整体解析成功率
+
+🎯 **测试场景类型**:
+- **正常日志**: 标准格式的常见日志
+- **异常日志**: 格式不完整或包含特殊字符的日志
+- **边界情况**: 极长字段、空值、特殊编码等
+- **混合格式**: 不同来源或时间段的日志混合
+
+🚀 **批量测试流程**:
+1. **准备测试数据集**: 收集不同类型的日志样本
+2. **执行批量测试**: 使用 `test_pipeline_complete_stream` 工具
+   - 支持实时流式反馈
+   - 自动处理多条日志
+   - 提供详细的进度报告
+3. **结果分析**: 
+   - 统计解析成功率
+   - 识别解析失败的日志模式
+   - 分析字段提取的一致性
+4. **问题诊断**: 对失败的日志使用 `get_logstash_logs` 查看错误
+
+📊 **测试指标**:
+- 📈 **解析成功率**: 成功解析的日志百分比
+- 🎯 **字段完整性**: 关键字段的提取率
+- ⚡ **处理性能**: 每秒处理的日志数量
+- 🚨 **错误类型分布**: 不同错误的频率统计
+
+✨ **批量测试优势**:
+- 流式处理，实时查看测试进度
+- 自动汇总统计结果
+- 识别配置的鲁棒性问题
+- 系统自动处理条件判断替换
+
+请提供您的日志数据集，我会帮您执行全面的批量测试。"""
+
+        else:
+            return f"""未知的提示类型: {prompt_name}
+
+🔧 **可用的测试提示**:
+- **test_existing_config**: 测试现有的 Logstash 配置文件
+- **test_log_matching**: 测试日志与配置的匹配效果  
+- **debug_parsing_failure**: 调试日志解析失败问题
+- **compare_before_after**: 比较配置修改前后的解析效果
+- **validate_field_extraction**: 验证字段提取是否正确
+- **batch_test_logs**: 批量测试多条日志记录
+
+💡 **使用建议**:
+这些提示专门针对实际测试场景设计，帮助您：
+- 快速测试现有配置
+- 验证日志解析效果
+- 调试解析问题
+- 批量测试和性能评估
+
+请选择适合您当前需求的提示类型。"""
 
 # 创建全局服务实例
 mcp_server = LogstashMCPServer()
@@ -621,7 +847,9 @@ def mcp_handler():
                             "listChanged": True
                         },
                         "logging": {},
-                        "prompts": {},
+                        "prompts": {
+                            "listChanged": True
+                        },
                         "resources": {},
                         "sampling": {}
                     },
@@ -639,6 +867,109 @@ def mcp_handler():
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "result": {}
+            })
+        
+        elif method == "list_prompts" or method == "prompts/list":
+            # 返回可用提示列表
+            prompts = [
+                {
+                    "name": "test_existing_config",
+                    "description": "测试现有的 Logstash 配置文件",
+                    "arguments": [
+                        {
+                            "name": "config_type",
+                            "description": "配置类型 (filter/pipeline/完整配置)",
+                            "required": False
+                        }
+                    ]
+                },
+                {
+                    "name": "test_log_matching",
+                    "description": "测试日志与配置的匹配效果",
+                    "arguments": [
+                        {
+                            "name": "log_type",
+                            "description": "日志类型 (nginx/apache/syslog/json/custom)",
+                            "required": False
+                        }
+                    ]
+                },
+                {
+                    "name": "debug_parsing_failure",
+                    "description": "调试日志解析失败问题",
+                    "arguments": [
+                        {
+                            "name": "error_type",
+                            "description": "错误类型 (grok_failure/json_parse_error/date_parse_error)",
+                            "required": False
+                        }
+                    ]
+                },
+                {
+                    "name": "compare_before_after",
+                    "description": "比较配置修改前后的解析效果",
+                    "arguments": [
+                        {
+                            "name": "modification_type",
+                            "description": "修改类型 (grok_pattern/field_mapping/date_format)",
+                            "required": False
+                        }
+                    ]
+                },
+                {
+                    "name": "validate_field_extraction",
+                    "description": "验证字段提取是否正确",
+                    "arguments": [
+                        {
+                            "name": "expected_fields",
+                            "description": "期望提取的字段列表",
+                            "required": False
+                        }
+                    ]
+                },
+                {
+                    "name": "batch_test_logs",
+                    "description": "批量测试多条日志记录",
+                    "arguments": [
+                        {
+                            "name": "test_scenario",
+                            "description": "测试场景 (正常日志/异常日志/边界情况)",
+                            "required": False
+                        }
+                    ]
+                }
+            ]
+            
+            return jsonify({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "prompts": prompts
+                }
+            })
+        
+        elif method == "get_prompt" or method == "prompts/get":
+            prompt_name = params.get("name")
+            prompt_args = params.get("arguments", {})
+            
+            # 生成具体的提示内容
+            prompt_content = mcp_server._generate_prompt_content(prompt_name, prompt_args)
+            
+            return jsonify({
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "description": f"Logstash 配置提示: {prompt_name}",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": {
+                                "type": "text",
+                                "text": prompt_content
+                            }
+                        }
+                    ]
+                }
             })
         
         elif method == "list_tools" or method == "tools/list":
