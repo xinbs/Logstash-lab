@@ -401,50 +401,84 @@ def logstash_logs():
                     logs_content.append(f"❌ 读取日志文件失败: {e}")
                     continue
         
-        # 如果没有找到日志文件，尝试通过 Docker API 获取容器日志
+        # 如果没有找到日志文件，尝试通过 docker 命令获取容器日志
         if not log_file_found:
             try:
                 import subprocess
-                result = subprocess.run([
-                    "docker", "logs", "--tail", "50", "logstash-lab"
-                ], capture_output=True, text=True, timeout=10, cwd="/")
+                
+                # 使用 docker logs 命令获取 Logstash 容器日志
+                result = subprocess.run(
+                    ["docker", "logs", "--tail", "50", "logstash-lab"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
                 
                 if result.returncode == 0:
-                    logs_content.append(f"📋 Logstash 容器日志 (Docker API)")
+                    # 成功获取日志
+                    logs_output = result.stdout + result.stderr  # 合并标准输出和错误输出
+                    
+                    logs_content.append(f"📋 Logstash 容器日志")
                     logs_content.append(f"📅 获取时间: {current_time}")
-                    logs_content.append("📊 显示最近 50 条日志")
+                    logs_content.append(f"📊 显示最近 50 条日志")
                     logs_content.append("=" * 80)
                     
-                    # 合并 stdout 和 stderr
-                    container_logs = result.stdout + result.stderr
-                    logs_content.extend(container_logs.splitlines())
+                    if logs_output.strip():
+                        logs_content.extend(logs_output.strip().split('\n'))
+                    else:
+                        logs_content.append("📝 暂无日志输出")
+                        
                 else:
-                    raise Exception(f"Docker 命令执行失败: {result.stderr}")
+                    # docker logs 命令失败，尝试其他方法
+                    raise Exception(f"docker logs 命令失败: {result.stderr}")
                     
             except Exception as docker_error:
-                # 如果都失败了，返回指导信息
-                logs_content = [
-                    f"📋 Logstash 日志查看功能",
-                    f"📅 当前时间: {current_time}",
-                    "",
-                    "⚠️ 暂时无法直接读取日志文件，请使用以下命令行方式：",
-                    "",
-                    "🔧 查看实时日志：",
-                    "sudo docker compose logs -f logstash",
-                    "",
-                    "📊 查看最近 50 条日志：",
-                    "sudo docker compose logs --tail=50 logstash",
-                    "",
-                    "🔍 查看最近 100 条日志：",
-                    "sudo docker compose logs --tail=100 logstash",
-                    "",
-                    "⚡ 只看错误日志：",
-                    "sudo docker compose logs logstash | grep -i error",
-                    "",
-                    f"❌ 错误信息: {docker_error}",
-                    "",
-                    "💡 提示: 重启容器后日志文件可能需要一些时间生成"
-                ]
+                # 如果 docker 命令失败，尝试获取 Logstash 状态信息
+                try:
+                    import urllib.request
+                    import json
+                    
+                    logstash_api_url = "http://logstash:9600/_node/stats"
+                    req = urllib.request.Request(logstash_api_url)
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        if response.status == 200:
+                            stats_data = json.loads(response.read().decode())
+                            
+                            logs_content.append(f"📋 Logstash 状态信息")
+                            logs_content.append(f"📅 获取时间: {current_time}")
+                            logs_content.append("📊 Logstash 节点统计信息")
+                            logs_content.append("=" * 80)
+                            
+                            if 'jvm' in stats_data:
+                                jvm_info = stats_data['jvm']
+                                logs_content.append(f"🔧 JVM 内存使用: {jvm_info.get('mem', {}).get('heap_used_percent', 'N/A')}%")
+                            
+                            if 'process' in stats_data:
+                                process_info = stats_data['process']
+                                logs_content.append(f"⏱️ 运行时间: {process_info.get('uptime_in_millis', 0) // 1000} 秒")
+                            
+                            if 'pipeline' in stats_data:
+                                pipeline_info = stats_data['pipeline']
+                                logs_content.append(f"📊 Pipeline 状态: {len(pipeline_info.get('pipelines', {}))} 个活跃管道")
+                        else:
+                            raise Exception(f"API 返回状态码: {response.status}")
+                            
+                except Exception as api_error:
+                    # 所有方法都失败了，返回错误信息和指导
+                    logs_content = [
+                        f"📋 Logstash 日志获取失败",
+                        f"📅 当前时间: {current_time}",
+                        "",
+                        "❌ 无法获取 Logstash 日志，可能的原因：",
+                        f"• Docker 命令错误: {docker_error}",
+                        f"• API 访问错误: {api_error}",
+                        "",
+                        "🔧 请在宿主机上手动查看日志：",
+                        "docker logs --tail=50 logstash-lab",
+                        "",
+                        "或使用 docker compose：",
+                        "docker compose logs --tail=50 logstash"
+                    ]
         
         return jsonify({"ok": True, "logs": "\n".join(logs_content)})
         
