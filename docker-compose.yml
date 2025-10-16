@@ -29,6 +29,7 @@ services:
       - ./data:/app/data                          # 读结果
       - ./web/app.py:/app/app.py                  # 开发时热更新
       - ./web/templates:/app/templates            # 开发时热更新
+      - ./utils:/app/utils                        # 验证工具模块
       - /var/run/docker.sock:/var/run/docker.sock # Docker socket for logs
     environment:
       - LOGSTASH_HTTP=http://logstash:15515       # 发送日志
@@ -45,6 +46,8 @@ services:
     volumes:
       - ./mcp_server/mcp_server.py:/app/mcp_server.py    # 开发时热更新
       - ./mcp_server/requirements.txt:/app/requirements.txt  # 依赖文件
+      - ./utils:/app/utils                               # 验证工具模块
+      - /var/run/docker.sock:/var/run/docker.sock       # Docker socket for validation
     environment:
       - LOGSTASH_SERVICE_URL=http://web:19000
       - FLASK_ENV=development                           # 开发模式，支持自动重载

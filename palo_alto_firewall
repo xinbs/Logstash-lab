@@ -1,0 +1,120 @@
+input {
+    tcp {
+        port => 18097
+        id => "input_palo_alto_firewall"
+        add_field => {
+            "[@metadata][type]" => "palo_alto_firewall"
+            "__pipline" => "palo_alto_firewall"
+            "log_source_type" => "palo_alto_firewall"
+        }
+    }
+}
+ 
+filter {
+    if "palo_alto_firewall" == [@metadata][type] {
+         mutate {
+            id => "filter_palo_alto_firewall"
+            add_field => {
+                "__source" => "palo_alto_firewall"
+            }
+            remove_field => ["event"]
+        }
+        grok {
+            id => "grok_palo_alto_firewall"
+            match => {
+                "message" => "<%{NUMBER:syslog_priority}>%{SYSLOGTIMESTAMP:syslog_timestamp} %{DATA:syslog_hostname} %{GREEDYDATA:grok_message}"
+            }
+        }
+        if "NonLive" in [grok_message] or "nonLive" in [grok_message] or "NPT" in [grok_message] {
+            drop { }
+        }
+ 
+        throttle {
+            id => "throttle_palo_alto_firewall"
+            key => "%{host}"
+            period => 60
+            max_age => 120
+            before_count => 0
+            after_count => 150000
+            add_tag => "throttled"
+            add_field => {
+                "throttle_message" => "Dropped due to throttling"
+            }
+        }
+        if "throttled" in [tags] {
+            drop {}
+        }
+        csv {
+            source => "grok_message"
+            target => "data_parsed"
+            separator => ","
+            autogenerate_column_names => true
+        }
+        mutate {
+            remove_field => ["grok_message"]
+            add_field => {
+                "syslog_sourceip" => "%{[@metadata][input][tcp][source][ip]}"
+                "log_source_device" => "Palo Alto Firewall @ %{[syslog_hostname]}"
+            }
+        }
+        # 解析认证相关的日志字段
+        if [data_parsed][column4] == "SYSTEM" and [data_parsed][column5] == "auth" {
+            # 处理认证成功的情况
+            if [data_parsed][column9] == "auth-success" {
+                grok {
+                    id => "grok_auth_success"
+                    match => {
+                        "[data_parsed][column15]" => [
+                            "authenticated for user '%{DATA:auth_user}'\..*auth profile '%{DATA:auth_profile}'.*server profile '%{DATA:server_profile}'.*server address '%{IP:server_address}'.*auth protocol '%{DATA:auth_protocol}'.*admin role '%{DATA:admin_role}'.*From: %{IP:from_ip}\.",
+                            "Admin %{DATA:auth_user} account has been restored - lockout timer expired\.",
+                            "authenticated for user '%{DATA:auth_user}'\.?\s*From: %{IP:from_ip}\."
+                        ]
+                    }
+                    tag_on_failure => ["_grokparsefailure_auth_success"]
+                }
+            }
+            # 处理认证失败的情况  
+            else if [data_parsed][column9] == "auth-fail" {
+                grok {
+                    id => "grok_auth_fail"
+                    match => {
+                        "[data_parsed][column15]" => [
+                            "failed authentication for user '%{DATA:user_name}'.*auth profile '%{DATA:auth_profile}', vsys '%{DATA:vsys}', server profile '%{DATA:server_profile}', server address '%{IP:dst_ip}', auth protocol '%{DATA:auth_protocol}', From: %{IP:src_ip}\.",
+                            "failed authentication for user '%{DATA:auth_user}'.*Reason: %{DATA:auth_reason}.*auth profile '%{DATA:auth_profile}'.*server profile '%{DATA:server_profile}'.*server address '%{IP:server_address}'.*auth protocol '%{DATA:auth_protocol}'.*From: %{IP:from_ip}\.",
+                            "failed authentication for user '%{DATA:user_name}'.\s*Reason: %{GREEDYDATA:auth_reason} From: %{IP:src_ip}\."
+                        ]
+                    }
+                    tag_on_failure => ["_grokparsefailure_auth_fail"]
+                }
+            }
+        }
+        if [data_parsed][column4] == "TRAFFIC" {
+              aggregate {
+                  task_id => "%{[data_parsed][column8]}-%{[data_parsed][column9]}-%{[data_parsed][column26]}-%{[data_parsed][column31]}"
+                  code => "
+                      event.to_hash.each { |k, v| map[k] = v }
+                      map['event_count'] ||= 0
+                      map['event_count'] += 1
+                      event.cancel()
+                  "
+                  push_map_as_event_on_timeout => true
+                  timeout => 30
+                  timeout_code => "
+                      event.set('[@metadata][type]', 'palo_alto_firewall')
+                  "
+              }
+        }
+    }
+}
+ 
+output {
+    if "palo_alto_firewall" == [@metadata][type] {
+        kafka {
+            id => "output_palo_alto_firewall"
+            bootstrap_servers => "sec-kafka-1.mdw.seabanksvc.com:9092,sec-kafka-2.mdw.seabanksvc.com:9092,sec-kafka-3.mdw.seabanksvc.com:9092"
+            topic_id => "siem_raw_data"
+            client_id => "kafka_palo_alto_client"
+            codec => json
+        }
+    }
+}

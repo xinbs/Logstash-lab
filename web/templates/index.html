@@ -208,6 +208,12 @@
                         <div style="margin-bottom: 12px;">
                             <input type="file" id="pipelineFile" name="file" style="margin-bottom: 8px;">
                         </div>
+                        <div class="checkbox-container" style="margin-bottom: 12px;">
+                            <label>
+                                <input type="checkbox" id="validateOnly" name="validate_only" value="1"> 
+                                仅验证配置（不应用到测试环境）
+                            </label>
+                        </div>
                         <div>
                             <button type="submit" class="btn-success">📤 上传 Pipeline 文件</button>
                             <button type="button" onclick="showPipelineTextarea()" class="btn-warning" style="margin-left: 8px;">📝 直接粘贴内容</button>
@@ -223,6 +229,12 @@
                                 placeholder="请粘贴完整的 Logstash pipeline 配置内容..."
                                 style="height: 200px; font-family: 'Courier New', monospace; font-size: 12px;"
                             ></textarea>
+                            <div class="checkbox-container" style="margin-top: 8px;">
+                                <label>
+                                    <input type="checkbox" id="validateOnlyText" name="validate_only" value="1"> 
+                                    仅验证配置（不应用到测试环境）
+                                </label>
+                            </div>
                             <div style="margin-top: 8px;">
                                 <button type="submit" class="btn-success">🚀 解析并应用 Pipeline</button>
                                 <button type="button" onclick="hidePipelineTextarea()" class="btn" style="margin-left: 8px;">❌ 取消</button>
@@ -263,6 +275,12 @@
         </div>
         
         <div id="message" class="message"></div>
+        
+        <!-- 验证结果显示区域 -->
+        <div id="validationResults" style="display: none; margin-top: 24px; padding: 16px; border-radius: 4px;">
+            <h3>🔍 配置验证结果</h3>
+            <div id="validationContent"></div>
+        </div>
         
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 32px;">
             <h3>📊 最近解析结果（最新 50 条 NDJSON）</h3>
@@ -539,12 +557,88 @@ date {
             document.getElementById('pipelineContent').value = '';
         }
         
+        // 显示验证结果
+        function showValidationResult(result) {
+            const validationResults = document.getElementById('validationResults');
+            const validationContent = document.getElementById('validationContent');
+            
+            if (result.ok) {
+                validationResults.style.backgroundColor = '#d4edda';
+                validationResults.style.borderLeft = '4px solid #28a745';
+                showMessage(result.message, 'success');
+            } else {
+                validationResults.style.backgroundColor = '#f8d7da';
+                validationResults.style.borderLeft = '4px solid #dc3545';
+                showMessage(result.message, 'error');
+            }
+            
+            let html = '';
+            
+            if (result.validation_result) {
+                const validation = result.validation_result;
+                
+                // 基本信息
+                html += `<div style="margin-bottom: 16px;">`;
+                html += `<strong>验证状态:</strong> ${validation.success ? '✅ 通过' : '❌ 失败'}<br>`;
+                html += `<strong>验证耗时:</strong> ${validation.validation_time.toFixed(2)} 秒<br>`;
+                html += `</div>`;
+                
+                // 错误信息
+                if (validation.errors && validation.errors.length > 0) {
+                    html += `<div style="margin-bottom: 16px;">`;
+                    html += `<h4 style="color: #dc3545; margin-bottom: 8px;">🚨 错误信息 (${validation.errors.length})</h4>`;
+                    validation.errors.forEach((error, index) => {
+                        html += `<div style="background: #fff; padding: 8px; margin-bottom: 8px; border-radius: 4px; border-left: 3px solid #dc3545;">`;
+                        html += `<strong>错误 ${index + 1}:</strong> ${error.message}<br>`;
+                        if (error.line) {
+                            html += `<small style="color: #666;">行号: ${error.line}</small>`;
+                        }
+                        if (error.column) {
+                            html += `<small style="color: #666;"> 列号: ${error.column}</small>`;
+                        }
+                        if (error.type) {
+                            html += `<small style="color: #666;"> 类型: ${error.type}</small>`;
+                        }
+                        html += `</div>`;
+                    });
+                    html += `</div>`;
+                }
+                
+                // 警告信息
+                if (validation.warnings && validation.warnings.length > 0) {
+                    html += `<div style="margin-bottom: 16px;">`;
+                    html += `<h4 style="color: #ffc107; margin-bottom: 8px;">⚠️ 警告信息 (${validation.warnings.length})</h4>`;
+                    validation.warnings.forEach((warning, index) => {
+                        html += `<div style="background: #fff; padding: 8px; margin-bottom: 8px; border-radius: 4px; border-left: 3px solid #ffc107;">`;
+                        html += `<strong>警告 ${index + 1}:</strong> ${warning.message}`;
+                        html += `</div>`;
+                    });
+                    html += `</div>`;
+                }
+                
+                // 原始输出（可折叠）
+                if (result.raw_output && result.raw_output.trim()) {
+                    html += `<details style="margin-top: 16px;">`;
+                    html += `<summary style="cursor: pointer; font-weight: bold;">📋 原始输出</summary>`;
+                    html += `<pre style="background: #f8f9fa; color: #333; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 12px; margin-top: 8px; border: 1px solid #dee2e6;">${result.raw_output}</pre>`;
+                    html += `</details>`;
+                }
+            }
+            
+            validationContent.innerHTML = html;
+            validationResults.style.display = 'block';
+            
+            // 滚动到验证结果
+            validationResults.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        
         // 处理文件上传表单
         document.getElementById('pipelineUploadForm').onsubmit = async function(e) {
             e.preventDefault();
             
             const fileInput = document.getElementById('pipelineFile');
             const file = fileInput.files[0];
+            const validateOnly = document.getElementById('validateOnly').checked;
             
             if (!file) {
                 showMessage('请选择一个 pipeline 配置文件', 'error');
@@ -555,32 +649,44 @@ date {
             formData.append('file', file);
             
             try {
-                showMessage('正在上传并解析 pipeline 文件...', 'success');
-                
-                const response = await fetch('/upload_pipeline', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const result = await response.json();
-                
-                if (result.ok) {
-                    showMessage(result.message, 'success');
+                if (validateOnly) {
+                    showMessage('正在验证 pipeline 配置...', 'success');
                     
-                    // 显示提取的 filter 预览
-                    if (result.applied_filter_preview) {
-                        const filterTextarea = document.getElementById('filter');
-                        filterTextarea.value = result.applied_filter_preview;
-                        saveFormData();
-                    }
+                    const response = await fetch('/validate_pipeline', {
+                        method: 'POST',
+                        body: formData
+                    });
                     
-                    // 清空文件输入
-                    fileInput.value = '';
+                    const result = await response.json();
+                    showValidationResult(result);
                 } else {
-                    showMessage(result.message || '上传失败', 'error');
+                    showMessage('正在上传并解析 pipeline 文件...', 'success');
+                    
+                    const response = await fetch('/upload_pipeline', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.ok) {
+                        showMessage(result.message, 'success');
+                        
+                        // 显示提取的 filter 预览
+                        if (result.applied_filter_preview) {
+                            const filterTextarea = document.getElementById('filter');
+                            filterTextarea.value = result.applied_filter_preview;
+                            saveFormData();
+                        }
+                    } else {
+                        showMessage(result.message || '上传失败', 'error');
+                    }
                 }
+                
+                // 清空文件输入
+                fileInput.value = '';
             } catch (error) {
-                showMessage('上传过程中发生错误: ' + error.message, 'error');
+                showMessage('处理过程中发生错误: ' + error.message, 'error');
             }
         };
         
@@ -589,6 +695,7 @@ date {
             e.preventDefault();
             
             const pipelineContent = document.getElementById('pipelineContent').value.trim();
+            const validateOnly = document.getElementById('validateOnlyText').checked;
             
             if (!pipelineContent) {
                 showMessage('请输入 pipeline 配置内容', 'error');
@@ -599,32 +706,44 @@ date {
             formData.append('pipeline', pipelineContent);
             
             try {
-                showMessage('正在解析 pipeline 内容...', 'success');
-                
-                const response = await fetch('/upload_pipeline', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const result = await response.json();
-                
-                if (result.ok) {
-                    showMessage(result.message, 'success');
+                if (validateOnly) {
+                    showMessage('正在验证 pipeline 配置...', 'success');
                     
-                    // 显示提取的 filter 预览
-                    if (result.applied_filter_preview) {
-                        const filterTextarea = document.getElementById('filter');
-                        filterTextarea.value = result.applied_filter_preview;
-                        saveFormData();
-                    }
+                    const response = await fetch('/validate_pipeline', {
+                        method: 'POST',
+                        body: formData
+                    });
                     
-                    // 隐藏文本输入区域
-                    hidePipelineTextarea();
+                    const result = await response.json();
+                    showValidationResult(result);
                 } else {
-                    showMessage(result.message || '解析失败', 'error');
+                    showMessage('正在解析 pipeline 内容...', 'success');
+                    
+                    const response = await fetch('/upload_pipeline', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.ok) {
+                        showMessage(result.message, 'success');
+                        
+                        // 显示提取的 filter 预览
+                        if (result.applied_filter_preview) {
+                            const filterTextarea = document.getElementById('filter');
+                            filterTextarea.value = result.applied_filter_preview;
+                            saveFormData();
+                        }
+                        
+                        // 隐藏文本输入区域
+                        hidePipelineTextarea();
+                    } else {
+                        showMessage(result.message || '解析失败', 'error');
+                    }
                 }
             } catch (error) {
-                showMessage('解析过程中发生错误: ' + error.message, 'error');
+                showMessage('处理过程中发生错误: ' + error.message, 'error');
             }
         };
     </script>

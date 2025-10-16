@@ -128,6 +128,42 @@ class LogstashMCPServer:
             "raw_response": result
         }
     
+    def validate_pipeline(self, pipeline_content: str) -> Dict[str, Any]:
+        """验证 Pipeline 配置"""
+        try:
+            # 导入验证工具
+            import sys
+            import os
+            sys.path.append('/app/utils')
+            from pipeline_validator import validate_pipeline_config
+            
+            # 验证配置
+            validation_result = validate_pipeline_config(pipeline_content)
+            
+            return {
+                "success": validation_result["success"],
+                "message": "配置验证成功" if validation_result["success"] else "配置验证失败",
+                "validation_result": {
+                    "success": validation_result["success"],
+                    "errors": validation_result["errors"],
+                    "warnings": validation_result["warnings"],
+                    "validation_time": validation_result["validation_time"]
+                },
+                "raw_output": validation_result["raw_output"]
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"验证过程出错: {str(e)}",
+                "validation_result": {
+                    "success": False,
+                    "errors": [{"message": str(e), "line": None, "column": None}],
+                    "warnings": [],
+                    "validation_time": 0
+                },
+                "raw_output": ""
+            }
+    
     def get_parsed_results(self, count: int = -1) -> Dict[str, Any]:
         """获取解析结果"""
         result = self._make_request("GET", "/get_parsed_results")
@@ -157,27 +193,74 @@ class LogstashMCPServer:
     
     def get_logstash_logs(self, filter_errors: bool = False) -> Dict[str, Any]:
         """获取 Logstash 日志"""
-        result = self._make_request("GET", "/logstash_logs")
-        logs = result.get("logs", "")
-        
-        if filter_errors:
-            log_lines = logs.split('\n')
-            error_lines = [line for line in log_lines if 'ERROR' in line.upper()]
-            filtered_logs = '\n'.join(error_lines)
+        try:
+            import subprocess
+            import time
             
+            # 使用 docker logs 命令直接获取 Logstash 容器日志
+            result = subprocess.run(
+                ["docker", "logs", "--tail", "100", "logstash-lab"],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                # 成功获取日志
+                logs_output = result.stdout + result.stderr  # 合并标准输出和错误输出
+                current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                
+                logs_content = []
+                logs_content.append(f"📋 Logstash 容器日志")
+                logs_content.append(f"📅 获取时间: {current_time}")
+                logs_content.append(f"📊 显示最近 100 条日志")
+                logs_content.append("=" * 80)
+                
+                if logs_output.strip():
+                    logs_content.extend(logs_output.strip().split('\n'))
+                else:
+                    logs_content.append("📝 暂无日志输出")
+                
+                logs = '\n'.join(logs_content)
+                
+                if filter_errors:
+                    log_lines = logs_output.split('\n')
+                    error_lines = [line for line in log_lines if 'ERROR' in line.upper() or 'FATAL' in line.upper()]
+                    filtered_logs = '\n'.join(error_lines)
+                    
+                    return {
+                        "success": True,
+                        "total_lines": len(log_lines),
+                        "error_lines": len(error_lines),
+                        "logs": filtered_logs if error_lines else "未发现错误日志",
+                        "raw_response": {"ok": True, "logs": logs}
+                    }
+                
+                return {
+                    "success": True,
+                    "logs": logs,
+                    "raw_response": {"ok": True, "logs": logs}
+                }
+            else:
+                # docker logs 命令失败
+                return {
+                    "success": False,
+                    "logs": f"获取日志失败: {result.stderr}",
+                    "raw_response": {"ok": False, "error": result.stderr}
+                }
+                
+        except subprocess.TimeoutExpired:
             return {
-                "success": result.get("ok", False),
-                "total_lines": len(log_lines),
-                "error_lines": len(error_lines),
-                "logs": filtered_logs,
-                "raw_response": result
+                "success": False,
+                "logs": "获取日志超时（30秒）",
+                "raw_response": {"ok": False, "error": "timeout"}
             }
-        
-        return {
-            "success": result.get("ok", False),
-            "logs": logs,
-            "raw_response": result
-        }
+        except Exception as e:
+            return {
+                "success": False,
+                "logs": f"获取日志出错: {str(e)}",
+                "raw_response": {"ok": False, "error": str(e)}
+            }
     
     def health_check(self) -> Dict[str, Any]:
         """健康检查"""
@@ -700,6 +783,7 @@ def index():
         ],
         "available_tools": [
             "upload_pipeline",
+            "validate_pipeline_config",
             "test_pipeline_complete_stream", 
             "send_test_log",
             "get_parsed_results",
@@ -742,6 +826,11 @@ def docs():
                     "method": "POST",
                     "endpoint": "/tools/upload_pipeline",
                     "description": "上传完整的 Logstash pipeline 配置"
+                },
+                "validate_pipeline": {
+                    "method": "POST",
+                    "endpoint": "/tools/validate_pipeline",
+                    "description": "验证 Logstash pipeline 配置语法"
                 },
                 "send_test_log": {
                     "method": "POST",
@@ -980,7 +1069,7 @@ def mcp_handler():
                     "tools": [
                         {
                             "name": "upload_pipeline",
-                            "description": "上传完整的 Logstash Pipeline 配置文件，自动提取 filter 块并应用到测试环境。重要：系统会自动将任何 if \"xxx\" == [@metadata][type] 条件替换为 if \"test\" == [@metadata][type]，您无需担心条件匹配问题",
+                            "description": "上传完整的 Logstash Pipeline 配置文件，自动提取 filter 块并应用到测试环境。重要：系统会自动将任何 if \"xxx\" == [@metadata][type] 条件替换为 if \"test\" == [@metadata][type]，您无需担心条件匹配问题。\n\n💡 推荐使用直接 HTTP 文件上传方式：\ncurl -X POST http://localhost:19001/tools/upload_pipeline -F 'file=@your_config.conf'\n\n此方式比 JSON-RPC 更稳定可靠，特别适合自动化脚本和远程调用。",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -992,6 +1081,20 @@ def mcp_handler():
                                         "type": "boolean",
                                         "description": "是否为文件上传方式",
                                         "default": True
+                                    }
+                                },
+                                "required": ["pipeline_content"]
+                            }
+                        },
+                        {
+                            "name": "validate_pipeline_config",
+                            "description": "验证 Logstash Pipeline 配置语法，不应用到测试环境。使用 Docker 容器运行 logstash --config.test_and_exit 进行完整的配置验证，返回详细的错误信息和行号。",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "pipeline_content": {
+                                        "type": "string",
+                                        "description": "要验证的完整 Pipeline 配置内容"
                                     }
                                 },
                                 "required": ["pipeline_content"]
@@ -1127,6 +1230,24 @@ def mcp_handler():
                             {
                                 "type": "text",
                                 "text": f"Pipeline 上传结果：\n{json.dumps(result, ensure_ascii=False, indent=2)}"
+                            }
+                        ],
+                        "isError": not result.get("success", False)
+                    }
+                })
+            
+            elif tool_name == "validate_pipeline_config":
+                result = mcp_server.validate_pipeline(
+                    tool_args.get("pipeline_content", "")
+                )
+                return jsonify({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Pipeline 验证结果：\n{json.dumps(result, ensure_ascii=False, indent=2)}"
                             }
                         ],
                         "isError": not result.get("success", False)
@@ -1322,6 +1443,37 @@ def api_upload_pipeline():
             return jsonify({"success": False, "error": "缺少 pipeline_content 参数"}), 400
         
         result = mcp_server.upload_pipeline(pipeline_content, use_file_upload)
+        return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
+
+@app.route("/tools/validate_pipeline", methods=["POST"])
+def api_validate_pipeline():
+    """验证 Pipeline 配置"""
+    try:
+        pipeline_content = ""
+        
+        # 检查是否是文件上传
+        if 'file' in request.files:
+            # 文件上传方式
+            file = request.files['file']
+            if file.filename:
+                pipeline_content = file.read().decode('utf-8')
+        elif 'pipeline' in request.form:
+            # 表单数据方式
+            pipeline_content = request.form.get('pipeline', '')
+        elif request.is_json:
+            # JSON 数据方式
+            data = request.get_json()
+            pipeline_content = data.get("pipeline_content", "")
+        else:
+            return jsonify({"success": False, "error": "未提供 pipeline 内容"}), 400
+        
+        if not pipeline_content:
+            return jsonify({"success": False, "error": "缺少 pipeline_content 参数"}), 400
+        
+        result = mcp_server.validate_pipeline(pipeline_content)
         return jsonify(result)
     
     except Exception as e:

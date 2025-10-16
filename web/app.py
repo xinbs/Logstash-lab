@@ -401,38 +401,34 @@ def logstash_logs():
                     logs_content.append(f"❌ 读取日志文件失败: {e}")
                     continue
         
-        # 如果没有找到日志文件，尝试通过 docker 命令获取容器日志
+        # 如果没有找到日志文件，尝试通过 MCP 服务获取容器日志
         if not log_file_found:
             try:
-                import subprocess
+                import requests
                 
-                # 使用 docker logs 命令获取 Logstash 容器日志
-                result = subprocess.run(
-                    ["docker", "logs", "--tail", "50", "logstash-lab"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10
-                )
+                # 调用 MCP 服务的日志获取 API
+                mcp_url = "http://mcp-server:19001/tools/get_logstash_logs"
+                response = requests.get(mcp_url, timeout=30)
                 
-                if result.returncode == 0:
-                    # 成功获取日志
-                    logs_output = result.stdout + result.stderr  # 合并标准输出和错误输出
-                    
-                    logs_content.append(f"📋 Logstash 容器日志")
-                    logs_content.append(f"📅 获取时间: {current_time}")
-                    logs_content.append(f"📊 显示最近 50 条日志")
-                    logs_content.append("=" * 80)
-                    
-                    if logs_output.strip():
-                        logs_content.extend(logs_output.strip().split('\n'))
-                    else:
-                        logs_content.append("📝 暂无日志输出")
+                if response.status_code == 200:
+                    mcp_result = response.json()
+                    if mcp_result.get("success", False):
+                        logs_content.append(f"📋 Logstash 容器日志 (通过 MCP 服务)")
+                        logs_content.append(f"📅 获取时间: {current_time}")
+                        logs_content.append("📊 最近的日志记录")
+                        logs_content.append("=" * 80)
                         
+                        # 从 MCP 服务的响应中提取日志内容
+                        if "logs" in mcp_result:
+                            logs_content.append(mcp_result["logs"])
+                        else:
+                            logs_content.append("📝 暂无日志输出")
+                    else:
+                        raise Exception(f"MCP 服务返回错误: {mcp_result.get('message', '未知错误')}")
                 else:
-                    # docker logs 命令失败，尝试其他方法
-                    raise Exception(f"docker logs 命令失败: {result.stderr}")
+                    raise Exception(f"MCP 服务返回状态码: {response.status_code}")
                     
-            except Exception as docker_error:
+            except Exception as mcp_error:
                 # 如果 docker 命令失败，尝试获取 Logstash 状态信息
                 try:
                     import urllib.request
@@ -665,6 +661,102 @@ def upload_pipeline():
         
     except Exception as e:
         return jsonify({"ok": False, "message": f"处理 pipeline 失败: {str(e)}"})
+
+@app.route("/validate_pipeline", methods=["POST"])
+def validate_pipeline():
+    """验证 Pipeline 配置，不应用到测试环境"""
+    try:
+        # 获取上传的内容
+        if 'file' in request.files:
+            # 文件上传
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({"ok": False, "message": "未选择文件"})
+            pipeline_content = file.read().decode('utf-8')
+        elif 'pipeline' in request.form:
+            # 表单数据
+            pipeline_content = request.form.get('pipeline', '')
+        else:
+            return jsonify({"ok": False, "message": "未提供 pipeline 内容"})
+        
+        if not pipeline_content.strip():
+            return jsonify({"ok": False, "message": "Pipeline 内容为空"})
+        
+        # 尝试多种验证方式
+        validation_result = None
+        
+        # 1. 首先尝试调用 MCP 服务的验证 API
+        try:
+            import requests
+            import json
+            
+            # 调用 MCP 服务的验证 API
+            mcp_url = "http://mcp-server:19001/tools/validate_pipeline"
+            
+            # 准备请求数据
+            files = {'file': ('pipeline.conf', pipeline_content, 'text/plain')}
+            
+            response = requests.post(mcp_url, files=files, timeout=60)
+            
+            if response.status_code == 200:
+                validation_result = response.json()
+            else:
+                raise Exception(f"MCP 服务返回错误: {response.status_code}, 响应: {response.text}")
+                
+        except Exception as mcp_error:
+            # 2. 如果 MCP 服务不可用，尝试本地验证（如果有 Docker CLI）
+            try:
+                # 导入验证工具
+                import sys
+                sys.path.append('/app/utils')
+                from pipeline_validator import validate_pipeline_config
+                
+                # 验证配置
+                validation_result = validate_pipeline_config(pipeline_content)
+                
+                # 格式化为与 MCP 服务相同的格式
+                validation_result = {
+                    "ok": validation_result["success"],
+                    "message": "配置验证成功" if validation_result["success"] else "配置验证失败",
+                    "validation_result": {
+                        "success": validation_result["success"],
+                        "errors": validation_result["errors"],
+                        "warnings": validation_result["warnings"],
+                        "validation_time": validation_result["validation_time"]
+                    },
+                    "raw_output": validation_result["raw_output"]
+                }
+                
+            except Exception as local_error:
+                # 3. 所有方法都失败了，返回详细错误信息
+                return jsonify({
+                    "ok": False, 
+                    "message": f"验证失败 - MCP服务: {str(mcp_error)}; 本地验证: {str(local_error)}",
+                    "validation_result": {
+                        "success": False,
+                        "errors": [
+                            {"message": f"MCP服务错误: {str(mcp_error)}", "line": None, "column": None},
+                            {"message": f"本地验证错误: {str(local_error)}", "line": None, "column": None}
+                        ],
+                        "warnings": [],
+                        "validation_time": 0
+                    }
+                })
+        
+        # 返回验证结果
+        return jsonify(validation_result)
+    
+    except Exception as e:
+        return jsonify({
+            "ok": False, 
+            "message": f"验证过程出错: {str(e)}",
+            "validation_result": {
+                "success": False,
+                "errors": [{"message": str(e), "line": None, "column": None}],
+                "warnings": [],
+                "validation_time": 0
+            }
+        })
 
 if __name__ == "__main__":
     # 初始化：确保目录存在
